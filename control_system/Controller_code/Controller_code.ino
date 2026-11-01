@@ -1,11 +1,10 @@
 
 #include <Wire.h>
 #include <Adafruit_AS5600.h>
-//#include <ESP32TimerInterrupt.h>
 #include <math.h>
 //#include <mcp_can.h>
 //#include <SPI.h>
-//#include "Encoder.h"
+#include "Encoder.h"
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
