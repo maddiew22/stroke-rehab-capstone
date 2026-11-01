@@ -1,12 +1,14 @@
 
 #include <Wire.h>
 #include <Adafruit_AS5600.h>
-#include <ESP32TimerInterrupt.h>
+//#include <ESP32TimerInterrupt.h>
 #include <math.h>
-#include <mcp_can.h>
-#include <SPI.h>
-#include "Encoder.h"
-#include "BluetoothSerial.h"
+//#include <mcp_can.h>
+//#include <SPI.h>
+//#include "Encoder.h"
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
 
 // USER SETTINGS
 
@@ -15,7 +17,7 @@ const int STEP_MODE = 0;
 const int TRAJECTORY_MODE = 1;
 
 // Select operating mode here
-int Mode = STEP_MODE;
+int Mode = TRAJECTORY_MODE;
 
 // Step input reference (radians)
 float Reference_Input = 0.261799;  // 15 degrees
@@ -31,7 +33,7 @@ float N = 100.0;
 float V_in = 24.0;
 
 // Controller timing
-unsigned int Period = 1.7;
+unsigned int Period = 1700;
 float Time = 5.0;
 
 // Elbow joint limits (radians)
@@ -72,13 +74,19 @@ bool ControllerRunning = false;
 // Reference and encoder angles (radians)
 float Reference_Angle = 0.0;
 float Encoder_elbow_angle = 0.0;
-BluetoothSerial BT;
-// Bluetooth reference buffer
-char Reference_Buffer[32];
-int Reference_Buffer_Index = 0;
+
+#define SERVICE_UUID "12345678-1234-1234-1234-1234567890AB"
+#define CHARACTERISTIC_UUID "12345678-1234-1234-1234-1234567890AC"
+
+BLEServer *BLE_Server = NULL;
+BLECharacteristic *BLE_Reference_Characteristic = NULL;
+
+bool BLE_Connected = false;
+
+portMUX_TYPE ReferenceMux = portMUX_INITIALIZER_UNLOCKED;
 
 // Reference stream status
-bool Has_Reference = false;
+volatile bool Has_Reference = false;
 
 unsigned long Last_Reference_Time = 0;
 const unsigned long REFERENCE_TIMEOUT_MS = 250;
@@ -101,7 +109,7 @@ float Freq = 0.0;
 float t = 0.0;
 int Cnt = 0;
 
-//// CAN FUNCTIONS
+// CAN FUNCTIONS
 //
 //void Pack32(long value, byte data[4])
 //{
@@ -151,54 +159,108 @@ int Cnt = 0;
 
 // REFERENCE INPUT FUNCTION
 
-void Read_Reference_Stream()
+class ReferenceCallbacks : public BLECharacteristicCallbacks
 {
-  while (BT.available() > 0)
-  {
-    char incoming = BT.read();
-
-    if (incoming == '\n')
+    void onWrite(BLECharacteristic *pCharacteristic)
     {
-      Reference_Buffer[Reference_Buffer_Index] = '\0';
+      std::string received = pCharacteristic->getValue();
+      String receivedValue = String(received.c_str());
 
-      if (Reference_Buffer_Index > 0)
+      receivedValue.trim();
+
+      if (receivedValue.length() == 0)
       {
-        char *endPtr;
-
-        float newReference = strtof(
-                               Reference_Buffer,
-                               &endPtr
-                             );
-
-        if (endPtr != Reference_Buffer &&
-            *endPtr == '\0' &&
-            isfinite(newReference) &&
-            newReference >= MIN_ELBOW_ANGLE &&
-            newReference <= MAX_ELBOW_ANGLE)
-        {
-          Reference_Angle = newReference;
-          Serial.println(Reference_Angle);
-          Last_Reference_Time = millis();
-          Has_Reference = true;
-        }
+        return;
       }
 
-      Reference_Buffer_Index = 0;
-    }
-    else if (incoming != '\r')
-    {
-      if (Reference_Buffer_Index <
-          sizeof(Reference_Buffer) - 1)
+      const char *input = receivedValue.c_str();
+      char *endPtr;
+
+      float newReference = strtof(input, &endPtr);
+
+      if (endPtr != input &&
+          *endPtr == '\0' &&
+          isfinite(newReference) &&
+          newReference >= MIN_ELBOW_ANGLE &&
+          newReference <= MAX_ELBOW_ANGLE)
       {
-        Reference_Buffer[Reference_Buffer_Index++] =
-          incoming;
-      }
-      else
-      {
-        Reference_Buffer_Index = 0;
+        portENTER_CRITICAL(&ReferenceMux);
+
+        Reference_Angle = newReference;
+        Last_Reference_Time = millis();
+        Has_Reference = true;
+
+        portEXIT_CRITICAL(&ReferenceMux);
+
+        Serial.println(newReference);
       }
     }
-  }
+};
+
+class ServerCallbacks : public BLEServerCallbacks
+{
+    void onConnect(BLEServer *pServer)
+    {
+      BLE_Connected = true;
+      Serial.println("Python connected via BLE!");
+    }
+
+    void onDisconnect(BLEServer *pServer)
+    {
+      BLE_Connected = false;
+      Serial.println("Python disconnected!");
+
+      BLEDevice::startAdvertising();
+    }
+};
+
+void Initialize_BLE()
+{
+  BLEDevice::init("Exoskeleton_ESP32");
+
+  BLE_Server = BLEDevice::createServer();
+  BLE_Server->setCallbacks(new ServerCallbacks());
+
+  BLEService *BLE_Service =
+    BLE_Server->createService(SERVICE_UUID);
+
+  BLE_Reference_Characteristic =
+    BLE_Service->createCharacteristic(
+      CHARACTERISTIC_UUID,
+      BLECharacteristic::PROPERTY_WRITE |
+      BLECharacteristic::PROPERTY_WRITE_NR
+    );
+
+  BLE_Reference_Characteristic->setCallbacks(
+    new ReferenceCallbacks()
+  );
+
+  BLE_Service->start();
+
+  BLEAdvertising *advertising = BLEDevice::getAdvertising();
+
+  advertising->addServiceUUID(SERVICE_UUID);
+  advertising->setScanResponse(true);
+
+  BLEDevice::startAdvertising();
+
+  Serial.println("BLE started.");
+  Serial.println("Device name: Exoskeleton_ESP32");
+}
+
+bool Get_Reference_Status(float &reference, unsigned long &lastTime)
+{
+  bool hasReference;
+
+  portENTER_CRITICAL(&ReferenceMux);
+
+  reference = Reference_Angle;
+  lastTime = Last_Reference_Time;
+  hasReference = Has_Reference;
+
+  portEXIT_CRITICAL(&ReferenceMux);
+
+  return hasReference;
 }
 
 //  PID FUNCTIONS
@@ -283,8 +345,11 @@ void Start_Controller()
   }
   else if (Mode == TRAJECTORY_MODE)
   {
-    if (!Has_Reference ||
-        millis() - Last_Reference_Time > REFERENCE_TIMEOUT_MS)
+    float reference;
+    unsigned long lastTime;
+
+    if (!Get_Reference_Status(reference, lastTime) ||
+        millis() - lastTime > REFERENCE_TIMEOUT_MS)
     {
       return;
     }
@@ -339,22 +404,8 @@ void setup()
 {
   Serial.begin(115200);
 
-  BT.begin("Exoskeleton_ESP32");
-  // Initialize Bluetooth
-  if (!BT.begin("Exoskeleton_ESP32"))
-  {
-    Serial.println("Bluetooth initialization failed!");
+  Initialize_BLE();
 
-    while (true)
-    {
-      //            Stop_Motor();
-      delay(100);
-    }
-  }
-
-  Serial.println("Bluetooth started.");
-  Serial.println("Pair with: Exoskeleton_ESP32");
-  //
   //    pinMode(ESTOP_PIN, INPUT);
   //    pinMode(START_PIN, INPUT);
 
@@ -386,7 +437,7 @@ void setup()
   //    Ready_Motor();
   //    Stop_Motor();
 
-  Ts = Period / 1000.0;
+  Ts = Period / 1000000.0;
   Freq = 1.0 / Ts;
 
   C1 = 0.0;
@@ -412,19 +463,21 @@ void setup()
   }
 
   // Initialize control timer
-  ControlTimer = timerBegin(1000000);
+  ControlTimer = timerBegin(0, 80, true);
 
   timerAttachInterrupt(
     ControlTimer,
-    &Timer_ISR
+    &Timer_ISR,
+    true
   );
 
-  timerAlarm(
+  timerAlarmWrite(
     ControlTimer,
     Period,
-    true,
-    0
+    true
   );
+
+  timerAlarmEnable(ControlTimer);
 
   timerStop(ControlTimer);
 
@@ -436,23 +489,17 @@ void setup()
   Serial.print("Sampling frequency: ");
   Serial.print(Freq);
   Serial.println(" Hz");
-
-  ControlTimer = timerBegin(1000000);
-  timerAttachInterrupt(ControlTimer, &Timer_ISR);
-  timerAlarm(ControlTimer, Period, true, 0);
-
-  timerStop(ControlTimer);
 }
 
 //  MAIN LOOP
 void loop()
 {
-  // Read reference trajectory stream
-  if (Mode == TRAJECTORY_MODE)
-  {
-    Read_Reference_Stream();
-  }
-  //
+  float reference;
+  unsigned long lastReferenceTime;
+
+  bool hasReference =
+    Get_Reference_Status(reference, lastReferenceTime);
+
   //    // Emergency stop handling (placeholder for now)
   //    if (Stop || digitalRead(ESTOP_PIN) == HIGH)
   //    {
@@ -472,8 +519,8 @@ void loop()
   // Automatically start trajectory mode once a valid reference angle has been received
   if (Mode == TRAJECTORY_MODE && !ControllerRunning)
   {
-    if (Has_Reference &&
-        millis() - Last_Reference_Time <= REFERENCE_TIMEOUT_MS)
+    if (hasReference &&
+        millis() - lastReferenceTime <= REFERENCE_TIMEOUT_MS)
     {
       Start_Controller();
     }
@@ -482,14 +529,16 @@ void loop()
   // Check for lost reference stream
   if (Mode == TRAJECTORY_MODE && ControllerRunning)
   {
-    if (millis() - Last_Reference_Time > REFERENCE_TIMEOUT_MS)
+    if (!hasReference ||
+        millis() - lastReferenceTime > REFERENCE_TIMEOUT_MS)
     {
       Serial.println("Reference stream lost!");
 
       Stop_Controller();
 
-      // Require a fresh reference before restarting
+      portENTER_CRITICAL(&ReferenceMux);
       Has_Reference = false;
+      portEXIT_CRITICAL(&ReferenceMux);
 
       return;
     }
@@ -559,9 +608,13 @@ void loop()
     // Fixed reference
     Reference_Angle = Reference_Input;
   }
+  else
+  {
+    Reference_Angle = reference;
+  }
 
   // In trajectory mode, Reference_Angle is updated
-  // continuously by Read_Reference_Stream().
+  // continuously by BLE.
 
   // Calculate PID output
   //    CLStep();
