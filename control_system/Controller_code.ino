@@ -6,30 +6,38 @@
 #include <mcp_can.h>
 #include <SPI.h>
 #include "Encoder.h"
+#include "BluetoothSerial.h"
 
-//  USER SETTINGS 
+// USER SETTINGS
 
-int Mode = 1;
-int Step_Input = 1;
+// Operating modes
+const int STEP_MODE = 0;
+const int TRAJECTORY_MODE = 1;
 
+// Select operating mode here
+int Mode = STEP_MODE;
+
+// Step input reference (radians)
+float Reference_Input = 0.0872665;  // 5 degrees
+
+// PID settings
 float Kp = 2.2881;
 float Ki = 0.0;
 float Kd = 0.0582836;
 float N = 100.0;
 
-float Reference_Input = 0.0872665;
-
-float H_Gain = 651.9;
-float I_Gain = 651.9;
-
+// Motor voltage
 float V_in = 24.0;
 
-unsigned int Period = 5000;
-float Time = 5.0;
+// Controller timing
+unsigned int Period = 5000; 
+float Time = 5.0;            
 
-const float MAX_ELBOW_ANGLE = 140.0;
+// Elbow joint limits (radians)
+const float MAX_ELBOW_ANGLE = 2.44346;  // 140 degrees
+const float MIN_ELBOW_ANGLE = 0.0;
 
-//  CAN SETTINGS 
+// CAN SETTINGS
 
 const int SPI_CS_PIN = 10;
 MCP_CAN CAN(SPI_CS_PIN);
@@ -38,41 +46,58 @@ const unsigned long MOTOR_CAN_ID = 0x01;
 
 float Motor_Duty = 0.0;
 
-//  SAFETY INPUTS 
+// SAFETY INPUTS
 
 const int ESTOP_PIN = 2;
 const int START_PIN = 3;
 
-//  GLOBAL VARIABLES 
+// GLOBAL VARIABLES
 
 const float pi = 3.141593;
 
+// Controller state
 volatile bool Go = false;
-volatile bool Timer_Go = false;
 volatile bool Stop = false;
-volatile bool Stop_bit = false;
+volatile bool StartRequested = false;
 
-signed long int Reference_Input_Encoder = 0;
-signed long int Encoder_Count = 0;
+// Timer state
+volatile uint32_t Timer_Ticks = 0;
 
-float CO[3] = {0, 0, 0};
-float E[3] = {0, 0, 0};
+hw_timer_t *ControlTimer = NULL;
+
+// Controller status
+bool ControllerRunning = false;
+
+// Reference and encoder angles (radians)
+float Reference_Angle = 0.0;
+float Encoder_elbow_angle = 0.0;
+BluetoothSerial BT;
+
+// Reference stream status
+bool Has_Reference = false;
+
+unsigned long Last_Reference_Time = 0;
+const unsigned long REFERENCE_TIMEOUT_MS = 250;
+
+// PID variables
+float CO[3] = {0.0, 0.0, 0.0};
+float E[3] = {0.0, 0.0, 0.0};
 
 float C1 = 0.0;
 float C2 = 0.0;
+
 float E0 = 0.0;
 float E1 = 0.0;
 float E2 = 0.0;
 
+// Timing variables
 float Ts = 0.0;
 float Freq = 0.0;
 
 float t = 0.0;
 int Cnt = 0;
 
-hw_timer_t *ControlTimer = NULL;
-
-//  CAN FUNCTIONS 
+// CAN FUNCTIONS
 
 void Pack32(long value, byte data[4])
 {
@@ -89,15 +114,11 @@ long Unpack32(byte data[4])
            ((long)data[2] << 8) |
            (long)data[3];
 }
-
 //  ENCODER FUNCTIONS 
 
 signed long int Read_Encoder()
 {
-    float elbow_angle = getSensorAngle();
-    float angle_rad = elbow_angle * pi / 180.0;
-
-    return (signed long int)(angle_rad * H_Gain);
+  return = getSensorAngle();
 }
 
 //  MOTOR FUNCTIONS 
@@ -124,11 +145,62 @@ void Stop_Motor()
     Move_Motor(0.0);
 }
 
+// REFERENCE INPUT FUNCTION
+
+void Read_Reference_Stream()
+{
+    while (BT.available() > 0)
+    {
+        char incoming = BT.read();
+
+        if (incoming == '\n')
+        {
+            Reference_Buffer[Reference_Buffer_Index] = '\0';
+
+            if (Reference_Buffer_Index > 0)
+            {
+                char *endPtr;
+
+                float newReference = strtof(
+                    Reference_Buffer,
+                    &endPtr
+                );
+
+                if (endPtr != Reference_Buffer &&
+                    *endPtr == '\0' &&
+                    isfinite(newReference) &&
+                    newReference >= MIN_ELBOW_ANGLE &&
+                    newReference <= MAX_ELBOW_ANGLE)
+                {
+                    Reference_Angle = newReference;
+                    Last_Reference_Time = millis();
+                    Has_Reference = true;
+                }
+            }
+
+            Reference_Buffer_Index = 0;
+        }
+        else if (incoming != '\r')
+        {
+            if (Reference_Buffer_Index <
+                sizeof(Reference_Buffer) - 1)
+            {
+                Reference_Buffer[Reference_Buffer_Index++] =
+                    incoming;
+            }
+            else
+            {
+                Reference_Buffer_Index = 0;
+            }
+        }
+    }
+}
+
 //  PID FUNCTIONS 
 
 void CLStep()
 {
-    E[0] = Reference_Input_Encoder - Encoder_Count;
+    E[0] = Reference_Angle - Encoder_elbow_angle;
 
     CO[0] = -C1 * CO[1] - C2 * CO[2]
             + E0 * E[0] + E1 * E[1] + E2 * E[2];
@@ -142,6 +214,91 @@ void CLStep()
     E[1] = E[0];
 }
 
+// CONTROLLER MANAGEMENT
+
+void Reset_Controller()
+{
+    // Reset PID history
+    CO[0] = 0.0;
+    CO[1] = 0.0;
+    CO[2] = 0.0;
+
+    E[0] = 0.0;
+    E[1] = 0.0;
+    E[2] = 0.0;
+
+    Motor_Duty = 0.0;
+
+    // Reset timing
+    t = 0.0;
+    Cnt = 0;
+
+    // Clear pending timer events
+    noInterrupts();
+    Timer_Ticks = 0;
+    interrupts();
+}
+
+void Start_Controller()
+{
+    if (Stop || digitalRead(ESTOP_PIN) == HIGH)
+    {
+        return;
+    }
+
+    if (Mode == STEP_MODE)
+    {
+        if (!isfinite(Reference_Input) ||
+            Reference_Input < MIN_ELBOW_ANGLE ||
+            Reference_Input > MAX_ELBOW_ANGLE)
+        {
+            return;
+        }
+
+        Reference_Angle = Reference_Input;
+    }
+    else if (Mode == TRAJECTORY_MODE)
+    {
+        if (!Has_Reference ||
+            millis() - Last_Reference_Time > REFERENCE_TIMEOUT_MS)
+        {
+            return;
+        }
+    }
+    else
+    {
+        return;
+    }
+
+    // Reset PID history
+    Reset_Controller();
+
+    // Start timer
+    timerWrite(ControlTimer, 0);
+
+    Go = true;
+    ControllerRunning = true;
+
+    timerStart(ControlTimer);
+
+    Serial.println("Controller started.");
+}
+
+void Stop_Controller()
+{
+    Go = false;
+
+    timerStop(ControlTimer);
+
+    ControllerRunning = false;
+
+    noInterrupts();
+    Timer_Ticks = 0;
+    interrupts();
+
+    Stop_Motor();
+}
+
 //  INTERRUPTS 
 void IRAM_ATTR Timer_ISR()
 {
@@ -153,25 +310,33 @@ void IRAM_ATTR STOP()
     Stop = true;
 }
 
-void IRAM_ATTR START()
-{
-    if (!Stop && digitalRead(ESTOP_PIN) == LOW)
-    {
-        Go = true;
-    }
-}
-
 //  SETUP 
 void setup()
 {
     Serial.begin(115200);
 
+    BT.begin("Exoskeleton_ESP32");
+    // Initialize Bluetooth
+    if (!BT.begin("Exoskeleton_ESP32"))
+    {
+        Serial.println("Bluetooth initialization failed!");
+
+        while (true)
+        {
+            Stop_Motor();
+            delay(100);
+        }
+    }
+
+    Serial.println("Bluetooth started.");
+    Serial.println("Pair with: Exoskeleton_ESP32");
+
     pinMode(ESTOP_PIN, INPUT);
     pinMode(START_PIN, INPUT);
 
     attachInterrupt(digitalPinToInterrupt(ESTOP_PIN), STOP, RISING);
-    attachInterrupt(digitalPinToInterrupt(START_PIN), START, RISING);
 
+    // Initialize SPI and CAN
     SPI.begin();
 
     while (CAN.begin(MCP_ANY, CAN_1000KBPS, MCP_8MHZ) != CAN_OK)
@@ -182,6 +347,7 @@ void setup()
 
     CAN.setMode(MCP_NORMAL);
 
+    // Initialize encoder
     if (!initializeEncoder())
     {
         Serial.println("Encoder initialization failed!");
@@ -194,6 +360,7 @@ void setup()
     }
 
     Ready_Motor();
+    Stop_Motor();
 
     Ts = Period / 1000000.0;
     Freq = 1.0 / Ts;
@@ -205,8 +372,37 @@ void setup()
     E1 = -Kp + Ki * Ts - 2.0 * Kd * N;
     E2 = Kd * N;
 
-    Reference_Input_Encoder =
-        (signed long int)(Reference_Input * I_Gain);
+    // Initialize selected operating mode
+    if (Mode == STEP_MODE)
+    {
+        Reference_Angle = Reference_Input;
+
+        Serial.println("Operating mode: STEP INPUT");
+    }
+    else
+    {
+        Has_Reference = false;
+
+        Serial.println("Operating mode: REFERENCE TRAJECTORY");
+        Serial.println("Waiting for reference angles...");
+    }
+
+    // Initialize control timer
+    ControlTimer = timerBegin(1000000);
+
+    timerAttachInterrupt(
+        ControlTimer,
+        &Timer_ISR
+    );
+
+    timerAlarm(
+        ControlTimer,
+        Period,
+        true,
+        0
+    );
+
+    timerStop(ControlTimer);
 
     Serial.println("Exoskeleton controller initialized.");
     Serial.print("Sampling period: ");
@@ -227,77 +423,149 @@ void setup()
 //  MAIN LOOP 
 void loop()
 {
+    // Read reference trajectory stream
+    if (Mode == TRAJECTORY_MODE)
+    {
+        Read_Reference_Stream();
+    }
+
+    // Emergency stop handling (placeholder for now)
     if (Stop || digitalRead(ESTOP_PIN) == HIGH)
     {
         Stop = true;
-        Go = false;
 
-        timerStop(ControlTimer);
-        Stop_Motor();
+        Stop_Controller();
 
         return;
     }
 
-    if (!Go)
+    // Automatically start step mode
+    if (Mode == STEP_MODE && !ControllerRunning)
     {
-        return;
+        Start_Controller();
     }
 
-    CO[0] = 0;
-    CO[1] = 0;
-    CO[2] = 0;
-
-    E[0] = 0;
-    E[1] = 0;
-    E[2] = 0;
-
-    t = 0.0;
-    Cnt = 0;
-
-    Timer_Go = false;
-
-    timerWrite(ControlTimer, 0);
-    timerStart(ControlTimer);
-
-    while (t < Time && !Stop)
+    // Automatically start trajectory mode once a valid reference angle has been received
+    if (Mode == TRAJECTORY_MODE && !ControllerRunning)
     {
-        if (Timer_Go)
+        if (Has_Reference &&
+            millis() - Last_Reference_Time <= REFERENCE_TIMEOUT_MS)
         {
-            Timer_Go = false;
-
-            if (digitalRead(ESTOP_PIN) == HIGH)
-            {
-                Stop = true;
-                break;
-            }
-
-            Encoder_Count = Read_Encoder();
-
-            float elbowAngle = getElbowAngle();
-
-            if (elbowAngle >= MAX_ELBOW_ANGLE)
-            {
-                Stop = true;
-                break;
-            }
-
-            CLStep();
-
-            if (digitalRead(ESTOP_PIN) == HIGH || Stop)
-            {
-                Stop = true;
-                break;
-            }
-
-            Move_Motor(Motor_Duty);
-
-            Cnt++;
-            t = Cnt * Ts;
+            Start_Controller();
         }
     }
 
-    timerStop(ControlTimer);
-    Stop_Motor();
+    // Check for lost reference stream
+    if (Mode == TRAJECTORY_MODE && ControllerRunning)
+    {
+        if (millis() - Last_Reference_Time > REFERENCE_TIMEOUT_MS)
+        {
+            Serial.println("Reference stream lost!");
 
-    Go = false;
+            Stop_Controller();
+
+            // Require a fresh reference before restarting
+            Has_Reference = false;
+
+            return;
+        }
+    }
+
+    // Wait until controller is enabled
+     if (!Go || !ControllerRunning)
+    {
+        return;
+    }
+
+    // Check pending timer events
+    uint32_t pendingTicks;
+
+    noInterrupts();
+
+    pendingTicks = Timer_Ticks;
+
+    Timer_Ticks = 0;
+
+    interrupts();
+
+    if (pendingTicks == 0)
+    {
+        return;
+    }
+
+    // More than one pending tick indicates an overrun.
+    // Stop rather than executing delayed control updates.
+
+    if (pendingTicks > 1)
+    {
+        Serial.println("Control loop overrun!");
+
+        Stop_Controller();
+
+        return;
+    }
+
+
+    // Read actual elbow angle from encoder
+    Encoder_elbow_angle = Read_Encoder();
+
+    if (!isfinite(Encoder_elbow_angle))
+    {
+        Serial.println("Invalid encoder reading!");
+
+        Stop_Controller();
+
+        return;
+    }
+
+    // Check elbow joint limits
+    if (Encoder_elbow_angle < MIN_ELBOW_ANGLE ||
+        Encoder_elbow_angle > MAX_ELBOW_ANGLE)
+    {
+        Serial.println("Elbow angle limit exceeded!");
+
+        Stop_Controller();
+
+        return;
+    }
+
+    // Select reference input
+    if (Mode == STEP_MODE)
+    {
+        // Fixed reference
+        Reference_Angle = Reference_Input;
+    }
+
+    // In trajectory mode, Reference_Angle is updated
+    // continuously by Read_Reference_Stream().
+
+    // Calculate PID output
+    CLStep();
+
+    // Final safety check
+    if (Stop || digitalRead(ESTOP_PIN) == HIGH)
+    {
+        Stop = true;
+
+        Stop_Controller();
+
+        return;
+    }
+
+
+    // Send motor command
+    Move_Motor(Motor_Duty);
+
+    // Update elapsed time
+    Cnt++;
+
+    t = Cnt * Ts;
+
+    // Stop after specified duration in step mode
+    if (Mode == STEP_MODE && t >= Time)
+    {
+        Serial.println("Step response completed.");
+
+        Stop_Controller();
+    }
 }

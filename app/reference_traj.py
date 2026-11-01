@@ -1,8 +1,17 @@
 
 import math
 import pygame
+import serial
+import time
 
-# Configuration
+# BLUETOOTH SETTINGS
+
+BT_SERIAL_PORT = "/dev/cu.Exoskeleton_ESP32"
+BT_BAUDRATE = 115200
+BT_SEND_INTERVAL = 0.02  # 50 Hz
+
+# CONFIGURATION
+
 pygame.init()
 
 WIDTH, HEIGHT = 900, 600
@@ -12,21 +21,95 @@ pygame.display.set_caption("Elbow Rehabilitation Prototype")
 clock = pygame.time.Clock()
 font = pygame.font.SysFont(None, 28)
 
-# Illustrative development parameters
+# Elbow flexion angle convention:
+# 0 degrees = fully extended
+# Positive angles = elbow flexion
+
 MIN_ANGLE = 0.0
 MAX_ANGLE = 130.0
-CYCLE_TIME = 8.0       # Seconds per flexion-extension cycle
+
+CYCLE_TIME = 8.0
 ARM_LENGTH = 150
 FPS = 60
 
+# BLUETOOTH INITIALIZATION
+
+bt = None
+
+try:
+    bt = serial.Serial(
+        port=BT_SERIAL_PORT,
+        baudrate=BT_BAUDRATE,
+        timeout=0,
+        write_timeout=0.1
+    )
+
+    # Allow Bluetooth connection to initialize
+    time.sleep(2)
+
+    print("Bluetooth connected to ESP32!")
+
+except (serial.SerialException, OSError) as e:
+    print(f"Bluetooth connection failed: {e}")
+    print("Running game without Bluetooth.")
+
+
+def send_reference_angle(theta_ref):
+    """
+    Send desired elbow flexion angle to ESP32.
+
+    Input:
+        theta_ref: desired elbow angle in degrees
+
+    Output:
+        Newline-terminated ASCII message over Bluetooth
+    """
+
+    if bt is None or not bt.is_open:
+        return
+
+    # Enforce reference angle limits
+    theta_ref = max(
+        MIN_ANGLE,
+        min(MAX_ANGLE, theta_ref)
+    )
+
+    # Format message
+    message = f"{theta_ref:.2f}\n"
+
+    try:
+        bt.write(message.encode("utf-8"))
+
+    except (serial.SerialException, OSError) as e:
+        print(f"Bluetooth transmission error: {e}")
+
+
+# SIMULATION INITIALIZATION
+
 # Simulation only: replace with encoder measurements later
 theta_actual = 30.0
-running = True
-start_time = pygame.time.get_ticks() / 1000.0
 
+running = True
+
+start_time = time.monotonic()
+
+# Bluetooth transmission timing
+last_bt_send = 0.0
+
+# REFERENCE TRAJECTORY
 
 def reference_trajectory(t):
-    """Smooth repeating elbow flexion-extension trajectory."""
+    """
+    Smooth repeating elbow flexion-extension trajectory.
+
+    0 degrees = full extension
+    130 degrees = maximum flexion
+
+    Returns:
+        theta_ref: desired angle (degrees)
+        omega_ref: desired angular velocity (degrees/second)
+    """
+
     midpoint = (MIN_ANGLE + MAX_ANGLE) / 2
     amplitude = (MAX_ANGLE - MIN_ANGLE) / 2
 
@@ -43,11 +126,15 @@ def reference_trajectory(t):
     return theta_ref, omega_ref
 
 
+# ARM DRAWING FUNCTION
 
 def draw_arm(surface, elbow, angle_deg, color, length):
     """
     Draw a stylized human arm with a vertical upper arm
     and a forearm that rotates around the elbow.
+
+    0 degrees = fully extended.
+    Positive angles = elbow flexion.
     """
 
     ex, ey = elbow
@@ -86,7 +173,7 @@ def draw_arm(surface, elbow, angle_deg, color, length):
     pygame.draw.circle(surface, outline, shoulder, 27)
     pygame.draw.circle(surface, skin, shoulder, 23)
 
-    # Forearm (rotates at elbow)
+    # Forearm
     forearm_shape = [
         point(0, -19),
         point(length * 0.25, -17),
@@ -190,60 +277,145 @@ def draw_arm(surface, elbow, angle_deg, color, length):
         2,
     )
 
+# MAIN GAME LOOP
 
+try:
 
-while running:
-    dt = clock.tick(FPS) / 1000.0
-    elapsed = pygame.time.get_ticks() / 1000.0 - start_time
+    while running:
 
-    # Generate the target reference
-    theta_ref, omega_ref = reference_trajectory(elapsed)
+        dt = clock.tick(FPS) / 1000.0
 
-    # Process input (simulated patient movement)
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+        elapsed = time.monotonic() - start_time
 
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_UP]:
-        theta_actual += 50 * dt
-    if keys[pygame.K_DOWN]:
-        theta_actual -= 50 * dt
+        # GENERATE REFERENCE TRAJECTORY
 
-    theta_actual = max(
-        MIN_ANGLE, min(MAX_ANGLE, theta_actual)
-    )
+        theta_ref, omega_ref = reference_trajectory(elapsed)
 
-    # 3. Compare reference and simulated actual angle
-    error = theta_ref - theta_actual
-    tracking = abs(error) <= 8.0
+        # STREAM REFERENCE ANGLE TO ESP32
 
-    # Draw interface
-    screen.fill((245, 247, 250))
+        current_time = time.monotonic()
 
-    screen.blit(
-        font.render("Reference arm", True, (30, 90, 200)),
-        (50, 30)
-    )
-    screen.blit(
-        font.render("Simulated patient arm", True, (200, 60, 60)),
-        (480, 30)
-    )
+        if current_time - last_bt_send >= BT_SEND_INTERVAL:
 
-    draw_arm(screen, (200, 230), theta_ref, (30, 90, 200), ARM_LENGTH)
-    draw_arm(screen, (620, 230), theta_actual, (200, 60, 60), ARM_LENGTH)
+            send_reference_angle(theta_ref)
 
-    lines = [
-        f"Tracking error: {error:.1f} deg",
-        "Use UP/DOWN arrows to simulate elbow movement"
-    ]
+            last_bt_send = current_time
 
-    for i, line in enumerate(lines):
-        screen.blit(
-            font.render(line, True, (35, 35, 35)),
-            (50, 430 + i * 27)
+        # 3. PROCESS INPUT
+
+        for event in pygame.event.get():
+
+            if event.type == pygame.QUIT:
+                running = False
+
+            elif event.type == pygame.KEYDOWN:
+
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+
+        # Simulated patient movement
+        keys = pygame.key.get_pressed()
+
+        if keys[pygame.K_UP]:
+            theta_actual += 50 * dt
+
+        if keys[pygame.K_DOWN]:
+            theta_actual -= 50 * dt
+
+        theta_actual = max(
+            MIN_ANGLE,
+            min(MAX_ANGLE, theta_actual)
         )
 
-    pygame.display.flip()
+        # CALCULATE TRACKING ERROR
 
-pygame.quit()
+        error = theta_ref - theta_actual
+
+        tracking = abs(error) <= 8.0
+
+        # DRAW INTERFACE
+
+        screen.fill((245, 247, 250))
+
+        screen.blit(
+            font.render("Reference arm", True, (30, 90, 200)),
+            (50, 30)
+        )
+
+        screen.blit(
+            font.render("Simulated patient arm", True, (200, 60, 60)),
+            (480, 30)
+        )
+
+        # Draw reference arm
+        draw_arm(
+            screen,
+            (200, 230),
+            theta_ref,
+            (30, 90, 200),
+            ARM_LENGTH
+        )
+
+        # Draw simulated patient arm
+        draw_arm(
+            screen,
+            (620, 230),
+            theta_actual,
+            (200, 60, 60),
+            ARM_LENGTH
+        )
+
+        # Feedback
+        lines = [
+            f"Reference angle: {theta_ref:.1f} deg",
+            f"Actual angle: {theta_actual:.1f} deg",
+            f"Tracking error: {error:.1f} deg",
+            "Use UP/DOWN arrows to simulate elbow movement"
+        ]
+
+        for i, line in enumerate(lines):
+
+            screen.blit(
+                font.render(line, True, (35, 35, 35)),
+                (50, 410 + i * 27)
+            )
+
+        # Bluetooth status
+        bt_status = (
+            "Bluetooth: CONNECTED"
+            if bt is not None and bt.is_open
+            else "Bluetooth: DISCONNECTED"
+        )
+
+        bt_color = (
+            (30, 150, 70)
+            if bt is not None and bt.is_open
+            else (200, 60, 60)
+        )
+
+        screen.blit(
+            font.render(bt_status, True, bt_color),
+            (50, 530)
+        )
+
+        # Tracking status
+        tracking_text = (
+            "Tracking: GOOD"
+            if tracking
+            else "Tracking: NEEDS IMPROVEMENT"
+        )
+
+        screen.blit(
+            font.render(tracking_text, True, (35, 35, 35)),
+            (480, 530)
+        )
+
+        pygame.display.flip()
+
+finally:
+    # CLEANUP
+    if bt is not None and bt.is_open:
+        bt.close()
+        print("Bluetooth connection closed.")
+
+    pygame.quit()
