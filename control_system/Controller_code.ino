@@ -18,9 +18,10 @@ const int TRAJECTORY_MODE = 1;
 int Mode = STEP_MODE;
 
 // Step input reference (radians)
-float Reference_Input = 0.0872665;  // 5 degrees
+float Reference_Input = 0.261799;  // 15 degrees
 
 // PID settings
+const float ERROR_DEADBAND = 0.0872665;
 float Kp = 2.2881;
 float Ki = 0.0;
 float Kd = 0.0582836;
@@ -200,7 +201,25 @@ void Read_Reference_Stream()
 
 void CLStep()
 {
-    E[0] = Reference_Angle - Encoder_elbow_angle;
+    float error = Reference_Angle - Encoder_elbow_angle;
+    if (fabs(error) <= ERROR_DEADBAND){
+        Motor_Duty = 0.0;
+
+        // Reset PID history to prevent accumulated
+        // controller output when assistance resumes
+        CO[0] = 0.0;
+        CO[1] = 0.0;
+        CO[2] = 0.0;
+
+        E[0] = 0.0;
+        E[1] = 0.0;
+        E[2] = 0.0;
+
+        return;
+    }
+
+    // Error is outside deadband then activate controller
+    E[0] = error
 
     CO[0] = -C1 * CO[1] - C2 * CO[2]
             + E0 * E[0] + E1 * E[1] + E2 * E[2];

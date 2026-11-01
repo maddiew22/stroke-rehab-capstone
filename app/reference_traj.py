@@ -26,9 +26,9 @@ font = pygame.font.SysFont(None, 28)
 # Positive angles = elbow flexion
 
 MIN_ANGLE = 0.0
-MAX_ANGLE = 130.0
+MAX_ANGLE = 140.0
 
-CYCLE_TIME = 8.0
+CYCLE_TIME = 12
 ARM_LENGTH = 150
 FPS = 60
 
