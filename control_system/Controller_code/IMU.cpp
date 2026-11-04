@@ -132,12 +132,76 @@ void getAccelerometerCalibration(IMU_calibration &calibration){
   Serial.println(calibration.accel_offset_z);
 }
 
+void getCalibratedAcceleration(IMU_calibration &calibration, float &x_accel, float &y_accel, float &z_accel){
+  sensors_event_t accel;
+  sensors_event_t gyro; 
+  sensors_event_t temp;
+  mpu_right.getEvent(&accel, &gyro, &temp);
 
+  // original accelerometer readings
+  x_accel = (accel.acceleration.x - calibration.accel_offset_x) * calibration.accel_scale_x;
+  y_accel = (accel.acceleration.y - calibration.accel_offset_y) * calibration.accel_scale_y;
+  z_accel = (accel.acceleration.z - calibration.accel_offset_z) * calibration.accel_scale_z;
 
-//
-//void getOrientation(float &pitch, float&roll) {
-//  
-//}
+}
+
+void getOrientation(IMU_calibration &calibration, float &pitch, float&roll) {
+  float x_accel, y_accel, z_accel;
+
+  getCalibratedAcceleration(calibration_right, x_accel, y_accel, z_accel);
+  
+  pitch = atan2(-z_accel, sqrt(y_accel*y_accel + x_accel*x_accel)) * 180.0/PI;
+  roll = atan2(x_accel,y_accel) * 180.0 /PI;
+
+  
+}
+
+void getPostureCalibration(IMU_calibration &calibration){
+  float sum_pitch = 0.0;
+  float sum_roll = 0.0;
+
+  Serial.println("Sit upright with both shoulders at the same height - engage your core and look ahead");
+  Serial.println("Starting Posture Calibration");
+  delay(3000);
+
+  for (int i = 0; i<CALIBRATION_SAMPLES; i++){
+    float pitch = 0.0; 
+    float roll = 0.0;
+
+    getOrientation(calibration, pitch, roll);
+
+    sum_pitch += pitch;
+    sum_roll += roll;
+
+    delay(10);
+  }
+
+  calibration.pitch_offset = sum_pitch / CALIBRATION_SAMPLES;
+  calibration.roll_offset = sum_roll / CALIBRATION_SAMPLES;
+
+  Serial.println("Postural calibrations complete");
+  delay(500);
+  Serial.print("Pitch avg: ");
+  Serial.println(calibration.pitch_offset);
+  Serial.print("Roll avg: ");
+  Serial.println(calibration.roll_offset);
+  
+}
+
+void checkPosture(IMU_calibration &calibration) {
+  float pitch = 0.0; 
+  float roll = 0.0;
+
+  getOrientation(calibration, pitch, roll);
+
+  float pitch_change = pitch - calibration.pitch_offset;
+  float roll_change = roll - calibration.roll_offset;
+
+  Serial.print("Pitch change: ");
+  Serial.println(pitch_change);
+  Serial.print("Roll change: ");
+  Serial.println(roll_change);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -162,67 +226,75 @@ void setup() {
   mpu_right.setFilterBandwidth(MPU6050_BAND_21_HZ); // might want to increase this paper has it at 100Hz
 
   Serial.println("Sit up straight, calibration starting soon...");
-  delay(3000);
+  delay(2000);
   Serial.println("Starting Calibration...");
   Serial.println("Starting Gyroscope Calibration");
   getGyroscopeCalibration(calibration_right);
 
-  delay(3000);
+  delay(2000);
   Serial.println("Starting Accelerometer Calibration");
   getAccelerometerCalibration(calibration_right);
+  getPostureCalibration(calibration_right);
+  delay(2000);
 
+  Serial.println("All Calibrated - ready for use!");
   delay(2000);
 }
 
 
 
 void loop() {
-  sensors_event_t accel;
-  sensors_event_t gyro; 
-  sensors_event_t temp;
-  mpu_right.getEvent(&accel, &gyro, &temp);
- 
-
-  // calibrated gyroscope readings
-  float x_gyro = gyro.gyro.x - calibration_right.gyro_offset_x;
-  float y_gyro = gyro.gyro.y - calibration_right.gyro_offset_y;
-  float z_gyro = gyro.gyro.z - calibration_right.gyro_offset_z;
-
-  // original accelerometer readings
-  float x_accel = (accel.acceleration.x - calibration_right.accel_offset_x) * calibration_right.accel_scale_x;
-  float y_accel = (accel.acceleration.y - calibration_right.accel_offset_y) * calibration_right.accel_scale_y;
-  float z_accel = (accel.acceleration.z - calibration_right.accel_offset_z) * calibration_right.accel_scale_z;
-
-  // original gyroscope readings
-  Serial.print("Gyro X Original: ");
-  Serial.print(gyro.gyro.x);
-  Serial.print(" Gyro Y Original: ");
-  Serial.print(gyro.gyro.y);
-  Serial.print(" Gyro Z Original: ");
-  Serial.println(gyro.gyro.z);
-
-  // calibrated gyroscope readings
-  Serial.print("Gyro X Calibrated: ");
-  Serial.print(x_gyro);
-  Serial.print(" Gyro Y Calibrated: ");
-  Serial.print(y_gyro);
-  Serial.print(" Gyro Z Calibrated: ");
-  Serial.println(z_gyro);
-
-  // original accelerometer readings
-  Serial.print("Accel X Original: ");
-  Serial.print(accel.acceleration.x);
-  Serial.print(" Accel Y Original: ");
-  Serial.print(accel.acceleration.y);
-  Serial.print(" Accel Z Original: ");
-  Serial.println(accel.acceleration.z);
-
-  // calibrated accelerometer readings
-  Serial.print("Accel X Calibrated: ");
-  Serial.print(x_accel);
-  Serial.print(" Accel Y Calibrated: ");
-  Serial.print(y_accel);
-  Serial.print(" Accel Z Calibrated: ");
-  Serial.println(z_accel);
-  delay(50);
+  checkPosture(calibration_right);
 }
+
+//// KEEP - USED TO EVALUATE CALIBRATION OFFSETS
+//void compareCalibrationReadings(){
+//    sensors_event_t accel;
+//  sensors_event_t gyro; 
+//  sensors_event_t temp;
+//  mpu_right.getEvent(&accel, &gyro, &temp);
+// 
+//
+//  // calibrated gyroscope readings
+//  float x_gyro = gyro.gyro.x - calibration_right.gyro_offset_x;
+//  float y_gyro = gyro.gyro.y - calibration_right.gyro_offset_y;
+//  float z_gyro = gyro.gyro.z - calibration_right.gyro_offset_z;
+//
+//  // original accelerometer readings
+//  float x_accel = (accel.acceleration.x - calibration_right.accel_offset_x) * calibration_right.accel_scale_x;
+//  float y_accel = (accel.acceleration.y - calibration_right.accel_offset_y) * calibration_right.accel_scale_y;
+//  float z_accel = (accel.acceleration.z - calibration_right.accel_offset_z) * calibration_right.accel_scale_z;
+//
+//  // original gyroscope readings
+//  Serial.print("Gyro X Original: ");
+//  Serial.print(gyro.gyro.x);
+//  Serial.print(" Gyro Y Original: ");
+//  Serial.print(gyro.gyro.y);
+//  Serial.print(" Gyro Z Original: ");
+//  Serial.println(gyro.gyro.z);
+//
+//  // calibrated gyroscope readings
+//  Serial.print("Gyro X Calibrated: ");
+//  Serial.print(x_gyro);
+//  Serial.print(" Gyro Y Calibrated: ");
+//  Serial.print(y_gyro);
+//  Serial.print(" Gyro Z Calibrated: ");
+//  Serial.println(z_gyro);
+//
+//  // original accelerometer readings
+//  Serial.print("Accel X Original: ");
+//  Serial.print(accel.acceleration.x);
+//  Serial.print(" Accel Y Original: ");
+//  Serial.print(accel.acceleration.y);
+//  Serial.print(" Accel Z Original: ");
+//  Serial.println(accel.acceleration.z);
+//
+//  // calibrated accelerometer readings
+//  Serial.print("Accel X Calibrated: ");
+//  Serial.print(x_accel);
+//  Serial.print(" Accel Y Calibrated: ");
+//  Serial.print(y_accel);
+//  Serial.print(" Accel Z Calibrated: ");
+//  Serial.println(z_accel);
+//  delay(50);
+//}
