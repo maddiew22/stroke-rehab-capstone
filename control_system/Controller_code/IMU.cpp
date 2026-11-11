@@ -5,20 +5,21 @@
 
 // Initialization
 Adafruit_MPU6050 mpu_right;
-//Adafruit_MPU6050 mpu_left;
+Adafruit_MPU6050 mpu_left;
 
 // CONSTANTS
 const int SDA_PIN = A6;
 const int SCL_PIN = A7;
-const int MPU_ADDRESS = 0x68;
+const int MPU_ADDRESS_RIGHT = 0x68;
+const int MPU_ADDRESS_LEFT = 0x69;
 //const int VIBRATIONAL_MOTOR_PIN = 4; // update when motor is in place
 // calibration constants
 const float FORWARD_LEAN_THRESHOLD = 10.0;
 const float SIDE_LEAN_THRESHOLD = 10.0;
 const int CALIBRATION_SAMPLES = 500;
-const float ACCEL_X = 9.81;
+const float ACCEL_X = 0.0;
 const float ACCEL_Y = 0.0;
-const float ACCEL_Z = 0.0;
+const float ACCEL_Z = 9.81;
 
 struct IMU_calibration {
   float gyro_offset_x = 0.0;
@@ -29,18 +30,19 @@ struct IMU_calibration {
   float accel_offset_y = 0.0;
   float accel_offset_z = 0.0;
 
-  float accel_scale_x = 0.0;
-  float accel_scale_y = 0.0;
-  float accel_scale_z = 0.0;
+  float accel_scale_x = 1.0;
+  float accel_scale_y = 1.0;
+  float accel_scale_z = 1.0;
 
   float pitch_offset = 0.0;
   float roll_offset = 0.0;
 };
 
 IMU_calibration calibration_right;
+IMU_calibration calibration_left;
 
 
-void getGyroscopeCalibration(IMU_calibration &calibration){
+void getGyroscopeCalibration(Adafruit_MPU6050 &mpu, IMU_calibration &calibration){
   // initialize temp variables for averaging final calibration
   float sum_x = 0.0;
   float sum_y = 0.0;
@@ -54,7 +56,7 @@ void getGyroscopeCalibration(IMU_calibration &calibration){
   delay(3000);
 
   for (int i=0; i<CALIBRATION_SAMPLES; i++){
-    mpu_right.getEvent(&accel, &gyro, &temp);
+    mpu.getEvent(&accel, &gyro, &temp);
 
     sum_x += gyro.gyro.x;
     sum_y += gyro.gyro.y;
@@ -77,7 +79,7 @@ void getGyroscopeCalibration(IMU_calibration &calibration){
   Serial.println(calibration.gyro_offset_z);
 }
 
-void getAccelerometerCalibration(IMU_calibration &calibration){
+void getAccelerometerCalibration(Adafruit_MPU6050 &mpu, IMU_calibration &calibration){
   // initialize temp variables for averaging final calibration
   float sum_x = 0.0;
   float sum_y = 0.0;
@@ -91,7 +93,7 @@ void getAccelerometerCalibration(IMU_calibration &calibration){
   delay(3000);
 
   for (int i=0; i<CALIBRATION_SAMPLES; i++){
-    mpu_right.getEvent(&accel, &gyro, &temp);
+    mpu.getEvent(&accel, &gyro, &temp);
   
     sum_x += accel.acceleration.x;
     sum_y += accel.acceleration.y;
@@ -132,11 +134,11 @@ void getAccelerometerCalibration(IMU_calibration &calibration){
   Serial.println(calibration.accel_offset_z);
 }
 
-void getCalibratedAcceleration(IMU_calibration &calibration, float &x_accel, float &y_accel, float &z_accel){
+void getCalibratedAcceleration(Adafruit_MPU6050 &mpu, IMU_calibration &calibration, float &x_accel, float &y_accel, float &z_accel){
   sensors_event_t accel;
   sensors_event_t gyro; 
   sensors_event_t temp;
-  mpu_right.getEvent(&accel, &gyro, &temp);
+  mpu.getEvent(&accel, &gyro, &temp);
 
   // original accelerometer readings
   x_accel = (accel.acceleration.x - calibration.accel_offset_x) * calibration.accel_scale_x;
@@ -145,30 +147,31 @@ void getCalibratedAcceleration(IMU_calibration &calibration, float &x_accel, flo
 
 }
 
-void getOrientation(IMU_calibration &calibration, float &pitch, float&roll) {
+void getOrientation(Adafruit_MPU6050 &mpu, IMU_calibration &calibration, float &pitch, float &roll) {
   float x_accel, y_accel, z_accel;
 
-  getCalibratedAcceleration(calibration_right, x_accel, y_accel, z_accel);
+  getCalibratedAcceleration(mpu, calibration, x_accel, y_accel, z_accel);
   
-  pitch = atan2(-z_accel, sqrt(y_accel*y_accel + x_accel*x_accel)) * 180.0/PI;
-  roll = atan2(x_accel,y_accel) * 180.0 /PI;
+  pitch = atan2(-x_accel, sqrt(y_accel*y_accel + z_accel*z_accel)) * 180.0/PI;
+  roll = atan2(z_accel,y_accel) * 180.0 /PI;
 
   
 }
 
-void getPostureCalibration(IMU_calibration &calibration){
+void getPostureCalibration(Adafruit_MPU6050 &mpu, IMU_calibration &calibration, const char *sensor){
   float sum_pitch = 0.0;
   float sum_roll = 0.0;
 
   Serial.println("Sit upright with both shoulders at the same height - engage your core and look ahead");
-  Serial.println("Starting Posture Calibration");
+  Serial.print("Starting Posture Calibration for ");
+  Serial.println(sensor);
   delay(3000);
 
   for (int i = 0; i<CALIBRATION_SAMPLES; i++){
     float pitch = 0.0; 
     float roll = 0.0;
 
-    getOrientation(calibration, pitch, roll);
+    getOrientation(mpu, calibration, pitch, roll);
 
     sum_pitch += pitch;
     sum_roll += roll;
@@ -188,19 +191,43 @@ void getPostureCalibration(IMU_calibration &calibration){
   
 }
 
-void checkPosture(IMU_calibration &calibration) {
-  float pitch = 0.0; 
-  float roll = 0.0;
+void checkPosture() {
+  float right_pitch = 0.0; 
+  float right_roll = 0.0;
+  float left_pitch = 0.0; 
+  float left_roll = 0.0;
 
-  getOrientation(calibration, pitch, roll);
+  getOrientation(mpu_right, calibration_right, right_pitch, right_roll);
+  getOrientation(mpu_left, calibration_left, left_pitch, left_roll);
 
-  float pitch_change = pitch - calibration.pitch_offset;
-  float roll_change = roll - calibration.roll_offset;
+  // calcualte chages from sensors internal reference
+  float right_pitch_change = right_pitch - calibration_right.pitch_offset;
+  float right_roll_change = right_roll - calibration_right.roll_offset;
+  float left_pitch_change = left_pitch - calibration_left.pitch_offset;
+  float left_roll_change = left_roll - calibration_left.roll_offset;
 
-  Serial.print("Pitch change: ");
-  Serial.println(pitch_change);
-  Serial.print("Roll change: ");
-  Serial.println(roll_change);
+  // forward/backward lean
+  float average_pitch_change = (right_pitch_change + left_pitch_change) / 2.0;
+
+  float pitch_difference = right_pitch_change - left_pitch_change;
+  float roll_difference = right_roll_change - left_roll_change;
+
+  Serial.print("Right Pitch change: ");
+  Serial.println(right_pitch_change);
+  Serial.print("Right Roll change: ");
+  Serial.println(right_roll_change);
+
+  Serial.print("Left Pitch change: ");
+  Serial.println(left_pitch_change);
+  Serial.print("Left Roll change: ");
+  Serial.println(left_roll_change);
+
+  Serial.print("Average Pitch change: ");
+  Serial.println(average_pitch_change);
+  Serial.print("Pitch difference: ");
+  Serial.println(pitch_difference);
+  Serial.print("Roll difference: ");
+  Serial.println(roll_difference);
 }
 
 void setup() {
@@ -213,8 +240,14 @@ void setup() {
   Wire.begin(SDA_PIN, SCL_PIN);
 
   // Initialize IMU
-  if(!mpu_right.begin(MPU_ADDRESS)){
-   Serial.println("Error: MPU6050 not found!");
+  if(!mpu_right.begin(MPU_ADDRESS_RIGHT)){
+   Serial.println("Error: MPU6050 on RIGHT SIDE not found!");
+    while (true){
+      delay(10);
+    }
+  }
+  if(!mpu_left.begin(MPU_ADDRESS_LEFT)){
+   Serial.println("Error: MPU6050 on LEFT SIDE not found!");
     while (true){
       delay(10);
     }
@@ -225,26 +258,37 @@ void setup() {
   mpu_right.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu_right.setFilterBandwidth(MPU6050_BAND_21_HZ); // might want to increase this paper has it at 100Hz
 
+  mpu_left.setAccelerometerRange(MPU6050_RANGE_4_G);
+  mpu_left.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu_left.setFilterBandwidth(MPU6050_BAND_21_HZ); // might want to increase this paper has it at 100Hz
+
   Serial.println("Sit up straight, calibration starting soon...");
   delay(2000);
   Serial.println("Starting Calibration...");
-  Serial.println("Starting Gyroscope Calibration");
-  getGyroscopeCalibration(calibration_right);
+  Serial.println("Starting Gyroscope Calibration right side");
+  getGyroscopeCalibration(mpu_right, calibration_right);
+  Serial.println("Starting Gyroscope Calibration left side");
+  getGyroscopeCalibration(mpu_left, calibration_left);
 
   delay(2000);
-  Serial.println("Starting Accelerometer Calibration");
-  getAccelerometerCalibration(calibration_right);
-  getPostureCalibration(calibration_right);
+  Serial.println("Starting Accelerometer Calibration right side");
+  getAccelerometerCalibration(mpu_right, calibration_right);
+  Serial.println("Starting Accelerometer Calibration left side");
+  getAccelerometerCalibration(mpu_left, calibration_left);
+  
+  delay(1000);
+  Serial.println("Starting Posture Calibration");
+  getPostureCalibration(mpu_right, calibration_right, "RIGHT SHOULDER IMU");
+  getPostureCalibration(mpu_left, calibration_left, "LEFT SHOULDER IMU");
   delay(2000);
 
-  Serial.println("All Calibrated - ready for use!");
+  Serial.println("BOTH SENSORS CALIBRATED - READY FOR USE!");
   delay(2000);
 }
 
-
-
 void loop() {
-  checkPosture(calibration_right);
+  checkPosture();
+  delay(100);
 }
 
 //// KEEP - USED TO EVALUATE CALIBRATION OFFSETS
