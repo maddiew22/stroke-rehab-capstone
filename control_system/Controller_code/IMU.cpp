@@ -2,10 +2,12 @@
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
+#include <Preferences.h>
 
 // Initialization
 Adafruit_MPU6050 mpu_right;
 Adafruit_MPU6050 mpu_left;
+Preferences pref;
 
 // CONSTANTS
 const int SDA_PIN = A6;
@@ -36,102 +38,278 @@ struct IMU_calibration {
 
   float pitch_offset = 0.0;
   float roll_offset = 0.0;
+
+  float pitch_filtered = 0.0;
+  float roll_filtered = 0.0;
 };
 
 IMU_calibration calibration_right;
 IMU_calibration calibration_left;
 
-
-void getGyroscopeCalibration(Adafruit_MPU6050 &mpu, IMU_calibration &calibration){
+// Calibrate Gyroscopes Together
+void calibrateBothGyroscopes() {
   // initialize temp variables for averaging final calibration
-  float sum_x = 0.0;
-  float sum_y = 0.0;
-  float sum_z = 0.0;
-  
-  sensors_event_t accel;
-  sensors_event_t gyro; 
-  sensors_event_t temp;
+  float right_sum_x = 0.0;
+  float right_sum_y = 0.0;
+  float right_sum_z = 0.0;
 
-  Serial.println("Calibrating Gyroscope in 3 secs keep completely still");
-  delay(3000);
+  float left_sum_x = 0.0;
+  float left_sum_y = 0.0;
+  float left_sum_z = 0.0;
+  
+  sensors_event_t accel_right;
+  sensors_event_t gyro_right; 
+  sensors_event_t temp_right;
+   
+  sensors_event_t accel_left;
+  sensors_event_t gyro_left; 
+  sensors_event_t temp_left;
+
+  Serial.println("CALIBRATING GYROSCOPE");
+  Serial.println("Sit upright and keep completely still...");
+  delay(1000);
 
   for (int i=0; i<CALIBRATION_SAMPLES; i++){
-    mpu.getEvent(&accel, &gyro, &temp);
+    mpu_right.getEvent(&accel_right, &gyro_right, &temp_right);
+    mpu_left.getEvent(&accel_left, &gyro_left, &temp_left);
 
-    sum_x += gyro.gyro.x;
-    sum_y += gyro.gyro.y;
-    sum_z += gyro.gyro.z;
+    right_sum_x += gyro_right.gyro.x;
+    right_sum_y += gyro_right.gyro.y;
+    right_sum_z += gyro_right.gyro.z;
+
+    left_sum_x += gyro_left.gyro.x;
+    left_sum_y += gyro_left.gyro.y;
+    left_sum_z += gyro_left.gyro.z;
 
     delay(10);
   }
 
-  calibration.gyro_offset_x = sum_x/CALIBRATION_SAMPLES;
-  calibration.gyro_offset_y = sum_y/CALIBRATION_SAMPLES;
-  calibration.gyro_offset_z = sum_z/CALIBRATION_SAMPLES;
+  calibration_right.gyro_offset_x = right_sum_x/CALIBRATION_SAMPLES;
+  calibration_right.gyro_offset_y = right_sum_y/CALIBRATION_SAMPLES;
+  calibration_right.gyro_offset_z = right_sum_z/CALIBRATION_SAMPLES;
 
-  Serial.println("Gyroscope Calibration Complete");
+  calibration_left.gyro_offset_x = left_sum_x/CALIBRATION_SAMPLES;
+  calibration_left.gyro_offset_y = left_sum_y/CALIBRATION_SAMPLES;
+  calibration_left.gyro_offset_z = left_sum_z/CALIBRATION_SAMPLES;
+
+  Serial.println("Both Gyroscopes are calibrated");
   delay(500);
-  Serial.print("X OFFSET: ");
-  Serial.println(calibration.gyro_offset_x);
-  Serial.print("Y OFFSET: ");
-  Serial.println(calibration.gyro_offset_y);
-  Serial.print("Z OFFSET: ");
-  Serial.println(calibration.gyro_offset_z);
+  Serial.print("RIGHT X OFFSET: ");
+  Serial.println(calibration_right.gyro_offset_x);
+  Serial.print("RIGHT Y OFFSET: ");
+  Serial.println(calibration_right.gyro_offset_y);
+  Serial.print("RIGHT Z OFFSET: ");
+  Serial.println(calibration_right.gyro_offset_z);
+
+  Serial.print("LEFT X OFFSET: ");
+  Serial.println(calibration_left.gyro_offset_x);
+  Serial.print("LEFT Y OFFSET: ");
+  Serial.println(calibration_left.gyro_offset_y);
+  Serial.print("LEFT Z OFFSET: ");
+  Serial.println(calibration_left.gyro_offset_z);
 }
 
-void getAccelerometerCalibration(Adafruit_MPU6050 &mpu, IMU_calibration &calibration){
+void calibrateBothAccelerometers(){
   // initialize temp variables for averaging final calibration
-  float sum_x = 0.0;
-  float sum_y = 0.0;
-  float sum_z = 0.0;
-  
-  sensors_event_t accel;
-  sensors_event_t gyro; 
-  sensors_event_t temp;
+  float right_sum_x = 0.0;
+  float right_sum_y = 0.0;
+  float right_sum_z = 0.0;
 
-  Serial.println("Calibrating Accelerometer in 3 secs keep completely still");
-  delay(3000);
+  float left_sum_x = 0.0;
+  float left_sum_y = 0.0;
+  float left_sum_z = 0.0;
+  
+  sensors_event_t accel_right;
+  sensors_event_t gyro_right; 
+  sensors_event_t temp_right;
+   
+  sensors_event_t accel_left;
+  sensors_event_t gyro_left; 
+  sensors_event_t temp_left;
+
+  Serial.println("ACCELEROMETER CALIBRATION");
+  delay(1000);
 
   for (int i=0; i<CALIBRATION_SAMPLES; i++){
-    mpu.getEvent(&accel, &gyro, &temp);
-  
-    sum_x += accel.acceleration.x;
-    sum_y += accel.acceleration.y;
-    sum_z += accel.acceleration.z;
+    mpu_right.getEvent(&accel_right, &gyro_right, &temp_right);
+    mpu_left.getEvent(&accel_left, &gyro_left, &temp_left);
+
+    right_sum_x += accel_right.acceleration.x;
+    right_sum_y += accel_right.acceleration.y;
+    right_sum_z += accel_right.acceleration.z;
+      
+    left_sum_x += accel_left.acceleration.x;
+    left_sum_y += accel_left.acceleration.y;
+    left_sum_z += accel_left.acceleration.z;
     
     delay(10);
   }
-  float avg_x = sum_x/CALIBRATION_SAMPLES;
-  float avg_y = sum_y/CALIBRATION_SAMPLES;
-  float avg_z = sum_z/CALIBRATION_SAMPLES;
+  float right_avg_x = right_sum_x/CALIBRATION_SAMPLES;
+  float right_avg_y = right_sum_y/CALIBRATION_SAMPLES;
+  float right_avg_z = right_sum_z/CALIBRATION_SAMPLES;
+
+  float left_avg_x = left_sum_x/CALIBRATION_SAMPLES;
+  float left_avg_y = left_sum_y/CALIBRATION_SAMPLES;
+  float left_avg_z = left_sum_z/CALIBRATION_SAMPLES;
 
   // Adjust for direction and gravity
 
-  calibration.accel_offset_x = avg_x - ACCEL_X;
-  calibration.accel_offset_y = avg_y - ACCEL_Y;
-  calibration.accel_offset_z = avg_z - ACCEL_Z;
+  calibration_right.accel_offset_x = right_avg_x - ACCEL_X;
+  calibration_right.accel_offset_y = right_avg_y - ACCEL_Y;
+  calibration_right.accel_offset_z = right_avg_z - ACCEL_Z;
+
+  calibration_left.accel_offset_x = left_avg_x - ACCEL_X;
+  calibration_left.accel_offset_y = left_avg_y - ACCEL_Y;
+  calibration_left.accel_offset_z = left_avg_z - (-1)*ACCEL_Z;
 
   // UPDATE SOON: need to perform one time calibration on each sensor to get these values
-  calibration.accel_scale_x = 1.0; 
-  calibration.accel_scale_y = 1.0; 
-  calibration.accel_scale_z = 1.0; 
+  calibration_right.accel_scale_x = 1.0; 
+  calibration_right.accel_scale_y = 1.0; 
+  calibration_right.accel_scale_z = 1.0; 
 
-  Serial.println("Accelerometer calibrations complete");
+  calibration_left.accel_scale_x = 1.0; 
+  calibration_left.accel_scale_y = 1.0; 
+  calibration_left.accel_scale_z = 1.0;
+  
+  Serial.println("Both Accelerometers are Calibrated");
   delay(500);
-  Serial.print("X avg: ");
-  Serial.println(avg_x);
-  Serial.print("Y avg: ");
-  Serial.println(avg_y);
-  Serial.print("Z avg: ");
-  Serial.println(avg_z);
+  Serial.print("RIGHT X avg: ");
+  Serial.println(right_avg_x);
+  Serial.print("RIGHT Y avg: ");
+  Serial.println(right_avg_y);
+  Serial.print("RIGHT Z avg: ");
+  Serial.println(right_avg_z);
+
+  Serial.print("RIGHT X OFFSET: ");
+  Serial.println(calibration_right.accel_offset_x);
+  Serial.print("RIGHT Y OFFSET: ");
+  Serial.println(calibration_right.accel_offset_y);
+  Serial.print("RIGHT Z OFFSET: ");
+  Serial.println(calibration_right.accel_offset_z);
 
   delay(500);
-  Serial.print("X OFFSET: ");
-  Serial.println(calibration.accel_offset_x);
-  Serial.print("Y OFFSET: ");
-  Serial.println(calibration.accel_offset_y);
-  Serial.print("Z OFFSET: ");
-  Serial.println(calibration.accel_offset_z);
+  Serial.print("LEFT X avg: ");
+  Serial.println(left_avg_x);
+  Serial.print("LEFT Y avg: ");
+  Serial.println(left_avg_y);
+  Serial.print("LEFT Z avg: ");
+  Serial.println(left_avg_z);
+  
+  Serial.print("LEFT X OFFSET: ");
+  Serial.println(calibration_left.accel_offset_x);
+  Serial.print("LEFT Y OFFSET: ");
+  Serial.println(calibration_left.accel_offset_y);
+  Serial.print("LEFT Z OFFSET: ");
+  Serial.println(calibration_left.accel_offset_z);
+}
+
+void saveCalibration() {
+
+  pref.begin("mpu_calibration", false);
+
+  // Right Gyroscope
+  pref.putFloat("rgx", calibration_right.gyro_offset_x);
+  pref.putFloat("rgy", calibration_right.gyro_offset_y);
+  pref.putFloat("rgz", calibration_right.gyro_offset_z);
+
+  // Right Accelerometer
+  pref.putFloat("rax", calibration_right.accel_offset_x);
+  pref.putFloat("ray", calibration_right.accel_offset_y);
+  pref.putFloat("raz", calibration_right.accel_offset_z);
+
+  // Left Gyroscope
+  pref.putFloat("lgx", calibration_left.gyro_offset_x);
+  pref.putFloat("lgy", calibration_left.gyro_offset_y);
+  pref.putFloat("lgz", calibration_left.gyro_offset_z);
+
+  // Right Accelerometer
+  pref.putFloat("lax", calibration_left.accel_offset_x);
+  pref.putFloat("lay", calibration_left.accel_offset_y);
+  pref.putFloat("laz", calibration_left.accel_offset_z);
+
+  pref.end();
+
+  Serial.println("Sensor calibrations saved!");
+}
+
+bool loadCalibration(){
+  // not calibrated - no preferences saved
+  if (!calibrationExists()){
+    pref.end();
+    return false;
+  }
+
+  pref.begin("mpu_calibration", true);
+
+  // RIGHT 
+  calibration_right.gyro_offset_x = pref.getFloat("rgx",0.0);
+  calibration_right.gyro_offset_y = pref.getFloat("rgy",0.0);
+  calibration_right.gyro_offset_z = pref.getFloat("rgz",0.0);
+
+  calibration_right.accel_offset_x = pref.getFloat("rax",0.0);
+  calibration_right.accel_offset_y = pref.getFloat("ray",0.0);
+  calibration_right.accel_offset_z = pref.getFloat("raz",0.0);
+
+  // LEFT
+  calibration_left.gyro_offset_x = pref.getFloat("lgx",0.0);
+  calibration_left.gyro_offset_y = pref.getFloat("lgy",0.0);
+  calibration_left.gyro_offset_z = pref.getFloat("lgz",0.0);
+
+  calibration_left.accel_offset_x = pref.getFloat("lax",0.0);
+  calibration_left.accel_offset_y = pref.getFloat("lay",0.0);
+  calibration_left.accel_offset_z = pref.getFloat("laz",0.0);
+
+  pref.end();
+  return true;
+}
+
+bool calibrationExists(){
+  pref.begin("mpu_calibration", true);
+
+  bool exists = pref.isKey("rgx") &&
+                pref.isKey("rgy") &&
+                pref.isKey("rgz") &&
+                pref.isKey("rax") &&
+                pref.isKey("ray") &&
+                pref.isKey("raz") &&
+                pref.isKey("lgx") &&
+                pref.isKey("lgy") &&
+                pref.isKey("lgz") &&
+                pref.isKey("lax") &&
+                pref.isKey("lay") &&
+                pref.isKey("laz");
+                
+  pref.end();
+  return exists;
+}
+
+void checkRecalibrationCommands(){
+  if (Serial.available()>0){
+    char command = Serial.read();
+    if (command == 'C' || command == 'c'){
+      Serial.println("Recalibrating both IMUs Accelerometer and Gyroscope");
+
+      calibrateBothGyroscopes();
+      calibrateBothAccelerometers();
+      saveCalibration();
+    }
+    else if (command == 'P' || command == 'p'){
+      Serial.println("Recalibrating Posture");
+
+      calibrateBothPostures();
+    }
+    else if (command == 'G' || command == 'g'){
+      Serial.println("Recalibrating Gyroscope");
+
+      calibrateBothGyroscopes();
+      saveCalibration();
+    }
+    else if (command == 'A' || command == 'a'){
+      Serial.println("Recalibrating Accelerometer");
+      calibrateBothAccelerometers();
+      saveCalibration();
+    }
+  }
 }
 
 void getCalibratedAcceleration(Adafruit_MPU6050 &mpu, IMU_calibration &calibration, float &x_accel, float &y_accel, float &z_accel){
@@ -154,40 +332,53 @@ void getOrientation(Adafruit_MPU6050 &mpu, IMU_calibration &calibration, float &
   
   pitch = atan2(-x_accel, sqrt(y_accel*y_accel + z_accel*z_accel)) * 180.0/PI;
   roll = atan2(z_accel,y_accel) * 180.0 /PI;
-
-  
 }
 
-void getPostureCalibration(Adafruit_MPU6050 &mpu, IMU_calibration &calibration, const char *sensor){
-  float sum_pitch = 0.0;
-  float sum_roll = 0.0;
+void calibrateBothPostures() {
+  float right_sum_pitch = 0.0;
+  float right_sum_roll = 0.0;
 
+  float left_sum_pitch = 0.0;
+  float left_sum_roll = 0.0;
+
+  Serial.println("POSTURE CALIBRATION");
   Serial.println("Sit upright with both shoulders at the same height - engage your core and look ahead");
-  Serial.print("Starting Posture Calibration for ");
-  Serial.println(sensor);
   delay(3000);
 
   for (int i = 0; i<CALIBRATION_SAMPLES; i++){
-    float pitch = 0.0; 
-    float roll = 0.0;
+    float pitch_right = 0.0; 
+    float roll_right = 0.0;
+    float pitch_left = 0.0; 
+    float roll_left = 0.0;
 
-    getOrientation(mpu, calibration, pitch, roll);
+    getOrientation(mpu_right, calibration_right, pitch_right, roll_right);
+    getOrientation(mpu_left, calibration_left, pitch_left, roll_left);
 
-    sum_pitch += pitch;
-    sum_roll += roll;
+    right_sum_pitch += pitch_right;
+    right_sum_roll += roll_right;
 
+    left_sum_pitch += pitch_left;
+    left_sum_roll += roll_left;
     delay(10);
   }
 
-  calibration.pitch_offset = sum_pitch / CALIBRATION_SAMPLES;
-  calibration.roll_offset = sum_roll / CALIBRATION_SAMPLES;
+  calibration_right.pitch_offset = right_sum_pitch / CALIBRATION_SAMPLES;
+  calibration_right.roll_offset = right_sum_roll / CALIBRATION_SAMPLES;
 
-  Serial.println("Postural calibrations complete");
+  calibration_left.pitch_offset = left_sum_pitch / CALIBRATION_SAMPLES;
+  calibration_left.roll_offset = left_sum_roll / CALIBRATION_SAMPLES;
+
+  Serial.println("Both sensor postural calibrations are complete");
   delay(500);
-  Serial.print("Pitch avg: ");
-  Serial.println(calibration.pitch_offset);
-  Serial.print("Roll avg: ");
-  Serial.println(calibration.roll_offset);
+  Serial.print("RIGHT PITCH avg: ");
+  Serial.println(calibration_right.pitch_offset);
+  Serial.print("RIGHT ROLL avg: ");
+  Serial.println(calibration_right.roll_offset);
+
+  Serial.print("LEFT PITCH avg: ");
+  Serial.println(calibration_left.pitch_offset);
+  Serial.print("LEFT ROLL avg: ");
+  Serial.println(calibration_left.roll_offset);
   
 }
 
@@ -208,9 +399,18 @@ void checkPosture() {
 
   // forward/backward lean
   float average_pitch_change = (right_pitch_change + left_pitch_change) / 2.0;
+  float average_roll_change = (right_roll_change + left_roll_change) / 2.0;
 
   float pitch_difference = right_pitch_change - left_pitch_change;
   float roll_difference = right_roll_change - left_roll_change;
+
+  if (fabs(average_pitch_change) > FORWARD_LEAN_THRESHOLD){
+    Serial.println("FORWARD LEAN DETECTED");
+  }
+
+  if (fabs(average_roll_change) > SIDE_LEAN_THRESHOLD){
+    Serial.println("SIDE LEAN DETECTED");
+  }
 
   Serial.print("Right Pitch change: ");
   Serial.println(right_pitch_change);
@@ -232,7 +432,7 @@ void checkPosture() {
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(10000);
 
   Serial.println("Starting up IMU");
 
@@ -262,24 +462,22 @@ void setup() {
   mpu_left.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu_left.setFilterBandwidth(MPU6050_BAND_21_HZ); // might want to increase this paper has it at 100Hz
 
-  Serial.println("Sit up straight, calibration starting soon...");
-  delay(2000);
-  Serial.println("Starting Calibration...");
-  Serial.println("Starting Gyroscope Calibration right side");
-  getGyroscopeCalibration(mpu_right, calibration_right);
-  Serial.println("Starting Gyroscope Calibration left side");
-  getGyroscopeCalibration(mpu_left, calibration_left);
-
-  delay(2000);
-  Serial.println("Starting Accelerometer Calibration right side");
-  getAccelerometerCalibration(mpu_right, calibration_right);
-  Serial.println("Starting Accelerometer Calibration left side");
-  getAccelerometerCalibration(mpu_left, calibration_left);
+  if (!calibrationExists()){
+    Serial.println("NO STORED CALIBRATION FOUND");
+    Serial.println("Starting sensor calibrations");
+    calibrateBothGyroscopes();
+    calibrateBothAccelerometers();
+    saveCalibration();
+  }
+  else{
+    Serial.println("Loading stored sensor offsets");
+    if (loadCalibration()){
+      Serial.println("Stored sensor calibrations loaded!");
+    }
+  }
   
-  delay(1000);
   Serial.println("Starting Posture Calibration");
-  getPostureCalibration(mpu_right, calibration_right, "RIGHT SHOULDER IMU");
-  getPostureCalibration(mpu_left, calibration_left, "LEFT SHOULDER IMU");
+  calibrateBothPostures();
   delay(2000);
 
   Serial.println("BOTH SENSORS CALIBRATED - READY FOR USE!");
@@ -288,6 +486,7 @@ void setup() {
 
 void loop() {
   checkPosture();
+  checkRecalibrationCommands();
   delay(100);
 }
 
@@ -341,4 +540,3 @@ void loop() {
 //  Serial.print(" Accel Z Calibrated: ");
 //  Serial.println(z_accel);
 //  delay(50);
-//}
