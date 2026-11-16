@@ -1,3 +1,4 @@
+
 // import libraries
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
@@ -14,7 +15,7 @@ const int SDA_PIN = A6;
 const int SCL_PIN = A7;
 const int MPU_ADDRESS_RIGHT = 0x68;
 const int MPU_ADDRESS_LEFT = 0x69;
-//const int VIBRATIONAL_MOTOR_PIN = 4; // update when motor is in place
+const int VIBRATIONAL_MOTOR_PIN = 4; // update when motor is in place
 // calibration constants
 const float FORWARD_LEAN_THRESHOLD = 10.0;
 const float SIDE_LEAN_THRESHOLD = 10.0;
@@ -410,6 +411,9 @@ void checkPosture() {
 
   if (fabs(average_roll_change) > SIDE_LEAN_THRESHOLD){
     Serial.println("SIDE LEAN DETECTED");
+    digitalWrite(VIBRATIONAL_MOTOR_PIN, HIGH);
+    delay(1000);
+    digitalWrite(VIBRATIONAL_MOTOR_PIN, LOW);
   }
 
   Serial.print("Right Pitch change: ");
@@ -433,9 +437,9 @@ void checkPosture() {
 void setup() {
   Serial.begin(115200);
   delay(10000);
-
+  pinMode(VIBRATIONAL_MOTOR_PIN, OUTPUT);
+  digitalWrite(VIBRATIONAL_MOTOR_PIN, LOW);
   Serial.println("Starting up IMU");
-
   //Configure I2C pins
   Wire.begin(SDA_PIN, SCL_PIN);
 
