@@ -13,7 +13,7 @@ def build(page, navigate):
 
             ft.Text(
                 "Welcome! Select an option to get started.",
-                size=16,
+                size=20,
                 color="#667788",
             ),
 
