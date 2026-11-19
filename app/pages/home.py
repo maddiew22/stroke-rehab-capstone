@@ -20,23 +20,47 @@ def build(page, navigate):
             ft.Container(height=20),
 
             ft.FilledButton(
-                "Start Rehabilitation",
+                content = ft.Text(
+                    "Start Rehabilitation",
+                    size=20,
+                    weight=ft.FontWeight.BOLD,
+                ),
                 icon=ft.Icons.PLAY_ARROW,
-                width=280,
+                width=320,
+                height=65,
+                style=ft.ButtonStyle(
+                    padding=20,
+                ),
                 on_click=lambda e: navigate("rehabilitation"),
             ),
 
             ft.OutlinedButton(
-                "View Progress",
+                content = ft.Text(
+                    "View Progress",
+                    size=20,
+                    weight=ft.FontWeight.BOLD,
+                ),
                 icon=ft.Icons.SHOW_CHART,
-                width=280,
+                width=320,
+                height=65,
+                style=ft.ButtonStyle(
+                    padding=20,
+                ),
                 on_click=lambda e: navigate("progress"),
             ),
 
             ft.OutlinedButton(
-                "Physio Settings",
+                content=ft.Text(
+                    "Physio Settings",
+                    size=20,
+                    weight=ft.FontWeight.BOLD,
+                ),
                 icon=ft.Icons.SETTINGS,
-                width=280,
+                width=320,
+                height=65,
+                style=ft.ButtonStyle(
+                    padding=20,
+                ),
                 on_click=lambda e: navigate("settings"),
             ),
         ],
