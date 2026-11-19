@@ -8,6 +8,8 @@ import flet as ft
 import flet.canvas as cv
 from bleak import BleakClient, BleakScanner
 
+import config
+
 
 BT_DEVICE_NAME = "Exoskeleton_ESP32"
 SERVICE_UUID = "12345678-1234-1234-1234-1234567890AB"
@@ -19,7 +21,6 @@ FEEDBACK_TIMEOUT = 0.5
 
 MIN_ANGLE = 0.0
 MAX_ANGLE = 140.0
-CYCLE_TIME = 15.0
 
 ARM_LENGTH = 125
 UI_FPS = 30
@@ -27,21 +28,21 @@ IMAGE_UPDATE_THRESHOLD = 0.1
 
 
 def reference_trajectory(t):
+    cycle_time = config.CYCLE_TIME
+
     midpoint = (MIN_ANGLE + MAX_ANGLE) / 2
     amplitude = (MAX_ANGLE - MIN_ANGLE) / 2
 
     theta_ref = midpoint - amplitude * math.cos(
-        2 * math.pi * t / CYCLE_TIME
+        2 * math.pi * t / cycle_time
     )
 
     omega_ref = (
         amplitude
-        * (2 * math.pi / CYCLE_TIME)
-        * math.sin(2 * math.pi * t / CYCLE_TIME)
+        * (2 * math.pi / cycle_time)
+        * math.sin(2 * math.pi * t / cycle_time)
     )
-
     return theta_ref, omega_ref
-
 
 def make_arm_shapes(angle_deg, reference=False):
     shapes = []
@@ -771,13 +772,29 @@ class RehabilitationPage:
                     self.run_status.color = "#218C55"
 
             if self.running and self.start_time is not None:
-
                 elapsed = (
                     self.elapsed_before_pause
                     + (now - self.start_time)
                 )
 
-                self.theta_ref, _ = reference_trajectory(elapsed)
+                if elapsed >= config.SESSION_DURATION:
+                    self.running = False
+                    self.start_time = None
+
+                    self.elapsed_before_pause = 0.0
+                    self.has_started = False
+
+                    self.start_pause_label.value = "START"
+                    self.start_pause_button.icon = ft.Icons.PLAY_ARROW
+                    self.start_pause_button.disabled = False
+
+                    self.countdown_overlay.visible = False
+
+                    self.run_status.value = "Session completed!"
+                    self.run_status.color = "#218C55"
+
+                else:
+                    self.theta_ref, _ = reference_trajectory(elapsed)
 
             if (
                 self.client is not None
