@@ -19,7 +19,7 @@ FEEDBACK_UUID = "12345678-1234-1234-1234-1234567890AD"
 BT_SEND_INTERVAL = 0.02
 FEEDBACK_TIMEOUT = 0.5
 
-MIN_ANGLE = 0.0
+MIN_ANGLE = 10.0
 MAX_ANGLE = 140.0
 
 ARM_LENGTH = 125
@@ -284,8 +284,8 @@ class RehabilitationPage:
         self.theta_ref = MIN_ANGLE
         self.latest_error = None
 
-        self.last_reference_drawn = 0.0
-        self.last_patient_drawn = 0.0
+        self.last_reference_drawn = 10.0
+        self.last_patient_drawn = 10.0
 
         self.countdown_active = False
         self.countdown_end = None
@@ -349,8 +349,8 @@ class RehabilitationPage:
             width=380,
             height=400,
             shapes=(
-                make_arm_shapes(0, reference=True)
-                + make_arm_shapes(0)
+                make_arm_shapes(MIN_ANGLE, reference=True)
+                + make_arm_shapes(MIN_ANGLE)
             ),
         )
 
