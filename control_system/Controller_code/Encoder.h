@@ -2,7 +2,7 @@
 #define ENCODER_H
 
 float getSensorAngle();
-bool initializeEncoder();
+void initializeEncoder();
 void updateEncoder();
 bool isEncoderCalibrated();
 

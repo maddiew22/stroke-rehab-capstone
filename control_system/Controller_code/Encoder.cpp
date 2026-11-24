@@ -2,9 +2,11 @@
 #include <Wire.h>
 #include <Adafruit_AS5600.h>
 #include <float.h>
-#include "Encoder.h"
+//#include "Encoder.h"
+#include <Preferences.h>
 
 Adafruit_AS5600 as5600;
+Preferences pref;
 
 // data pin is A6 on ESP32
 // clock pin is A7 on ESP32
@@ -21,11 +23,19 @@ const float MAX_CALIBRATION_VARIATION = 10.0;
 const int MAX_RETRIES = 10; // change later (for now makes testing easier)
 const int DIRECTION = 1; // set to -1 if the magnet is flipped when placed in enclosure
 
+const float MIN_ALLOWED_ANGLE = -10.0;
+const float MAX_ALLOWED_ANGLE = 150.0;
+
 // store calibration data
 float c_starting_angle = 0.0;
 float c_max_angle = 0.0;
 float c_min_angle = 0.0;
+
 bool calibrated = false;
+
+bool patient_limits_saved = false; 
+bool min_limit_set = false;
+bool max_limit_set = false;
 
 bool isEncoderCalibrated() {
     return calibrated;
@@ -77,8 +87,132 @@ bool getStableAngle(float &avg_angle){
   return true;
 }
 
+bool load_patient_limits() {
+  pref.begin("patient", false);
+  bool limit_exists = pref.getBool("limits_set", false);
+
+  if (limit_exists) {
+    c_min_angle = pref.getFloat("min_angle", 0.0);
+    c_max_angle = pref.getFloat("max_angle", 0.0);
+  }
+  pref.end();
+  if (limit_exists && c_min_angle < c_max_angle && c_min_angle >= MIN_ALLOWED_ANGLE && c_max_angle <= MAX_ALLOWED_ANGLE){
+    patient_limits_saved = true;
+
+    min_limit_set = true;
+    max_limit_set = true;
+    Serial.println("Patient Calibrations loaded successfully");
+
+    Serial.print("Minimum loaded elbow angle: ");
+    Serial.println(c_min_angle);
+    Serial.print("Maximum loaded elbow angle: ");
+    Serial.println(c_max_angle);
+
+    return true;
+  }
+
+  Serial.println("No valid patient calibration found");
+  Serial.println("Physiotherapist must calibrate device before use");
+  patient_limits_saved = false;
+  min_limit_set = false;
+  max_limit_set = false;
+  return false;
+}
+
+
+bool save_patient_limits(){
+  pref.begin("patient", false);
+  pref.putFloat("min_angle", c_min_angle);
+  pref.putFloat("max_angle", c_max_angle);
+  
+  pref.putBool("limits_set", true);
+  pref.end();
+  patient_limits_saved=true;
+
+  Serial.println("Patient calibration saved successfully");
+  return true;
+}
+
+
+void set_patient_limits() {
+  Serial.println("PATIENT CALIBRATION LIMITS");
+  Serial.println("Press L when ready to set LOWER limit");
+  Serial.println("Press U when ready to set UPPER limit");
+  delay(200);
+
+  while (!min_limit_set || !max_limit_set){
+      Serial.print("Current elbow angle: ");
+      Serial.println(getSensorAngle());
+
+      if (Serial.available()){
+        String command = Serial.readStringUntil('\n');
+        command.trim();
+        command.toUpperCase();
+
+        if (command == "L"){
+          Serial.println("Keep arm straight at LOWER limit");
+          c_min_angle = getSensorAngle(); 
+          min_limit_set = true;
+          Serial.print("Lower elbow angle: ");
+          Serial.println(c_min_angle);
+        }
+        else if (command == "U"){
+          Serial.println("Keep arm bent at UPPER limit");
+          c_max_angle = getSensorAngle(); 
+          max_limit_set = true;
+          Serial.print("Upper elbow angle: ");
+          Serial.println(c_max_angle);
+        }
+        else if (command == "R"){
+          c_min_angle = 0.0;
+          c_max_angle = 0.0;
+          min_limit_set = false;
+          max_limit_set = false;
+          Serial.println("Both limits RESET");
+          Serial.println("Recalibrate both limits");
+          Serial.println("Press L when ready to set LOWER limit");
+          Serial.println("Press U when ready to set UPPER limit");
+        }
+        else {
+          Serial.println("Invalid command. Enter L, U or R");
+        }
+      }
+      delay(200);
+  }
+}
+
+bool calibrate_patient_limits(){
+  while (true) {
+    min_limit_set = false;
+    max_limit_set = false;
+    c_min_angle = 0.0;
+    c_max_angle = 0.0;
+
+    set_patient_limits();
+
+    // validate the limits 
+    if (c_min_angle >= c_max_angle || c_min_angle < MIN_ALLOWED_ANGLE || c_max_angle > MAX_ALLOWED_ANGLE) {
+      Serial.println("ERROR: Invalid Patient limits - RECALIBRATE");
+      continue;
+    }
+
+    Serial.println("Patient calibration complete");
+//    Serial.print("Starting position: ");
+//    Serial.println(c_starting_angle);
+    Serial.print("Lower limit: ");
+    Serial.println(c_min_angle);
+    Serial.print("Upper limit: ");
+    Serial.println(c_max_angle);
+
+    save_patient_limits();
+    break;
+  }
+  return true;
+}
+
+
 // setup() function 
-bool initializeEncoder() {
+void initializeEncoder() {
 // void setup(){ //Keep this for testing - I can't test this on the arduino without a void setup and loop function 
     Serial.begin(115200);
     // initalize I2C for clock and data
@@ -97,64 +231,46 @@ bool initializeEncoder() {
         delay(1000);
     }
     Serial.println("Magnet detected");
-    
-    for (int retries=1; retries<=MAX_RETRIES && !calibrated; retries++) {
-        float initial_angle = 0.0;
-    
-        if (!getStableAngle(initial_angle)){
-          Serial.println("Calibration failed: reading unstable - keep arm still");
-          delay(1000);
-          continue;
-        }
 
-        Serial.print("Initial sensor angle: ");
-        Serial.println(initial_angle);
+    bool saved = load_patient_limits();
 
-        // check if the starting position is within 10 degrees of 0
-        float angle_difference = initial_angle - SENSOR_ZERO;
-
-        if (fabs(angle_difference) <= CALIBRATION_TOLERANCE) {
-
-            c_starting_angle = initial_angle;
-            calibrated = true;
-
-            c_min_angle = c_starting_angle;
-            c_max_angle = min(MAX_ANGLE, c_starting_angle + MAX_ANGLE);
-
-            Serial.println("AS5600 Calibrated Successfully");
-            Serial.print("New zero position: ");
-            Serial.println(c_starting_angle);
-            Serial.print("Maximum permitted sensor angle: ");
-            Serial.println(c_max_angle);
-            Serial.print("Minimum permitted sensor angle: ");
-            Serial.println(c_min_angle);
-        }
-        else {
-            Serial.print("Calibration failed - arm must be within ");  
-            Serial.print(CALIBRATION_TOLERANCE);
-            Serial.println(" degrees of perfectly straight");
-            Serial.print("Arm angle: ");
-            Serial.println(initial_angle);
-            Serial.print("Trying again, Retry: ");
-            Serial.println(retries);
-            delay(2000);
-        }
+    if(saved) {
+      Serial.println("Previous patient calibration found");
     }
-
-    if (!calibrated) {
-        Serial.println("Calibration failed");
-        Serial.println("Straighten arm and reset the board");
-
-       return false;  // CHANGED: return failure instead of infinite loop
+    else {
+      calibrate_patient_limits();
     }
-
-   return true;  // CHANGED: return success
+    
+    calibrated = true;
+    
+//    return false;  // CHANGED: return failure instead of infinite loop
+//
+//   return true;  // CHANGED: return success
 }
 
 
 // loop() function
 void updateEncoder() {
 // void loop(){ //keep for testing
+
+  if (Serial.available()){
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    command.toUpperCase();
+
+    if (command == "C") {
+      Serial.println("Recalibration Requested");
+
+      calibrated = false;
+      min_limit_set = false;
+      max_limit_set = false;
+
+      calibrate_patient_limits();
+
+      calibrated = true;
+      Serial.println("Recalibration complete");
+    }
+  }
 
     if (!calibrated) {
         return;
@@ -167,16 +283,16 @@ void updateEncoder() {
 
     float raw_current_angle = getSensorAngle(); //from zero
 
-    float elbow_angle = raw_current_angle - c_starting_angle; // from calibrated start
-
+//    float elbow_angle = raw_current_angle - c_starting_angle; // from calibrated start
+    
     Serial.print("Raw sensor angle: ");
     Serial.print(raw_current_angle);
 
-    Serial.print(" | Elbow Movement from starting position: ");
-    Serial.print(elbow_angle);
+//    Serial.print(" | Elbow Movement from starting position: ");
+//    Serial.print(elbow_angle);
 
     Serial.print(" | Max angle permitted: ");
-    Serial.println(c_max_angle);
+    Serial.print(c_max_angle);
     Serial.print(" | Min angle permitted: ");
     Serial.println(c_min_angle);
 
