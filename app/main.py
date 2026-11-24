@@ -8,7 +8,7 @@ from pages.rehabilitation import RehabilitationPage
 def main(page: ft.Page):
     page.title = "Elbow Rehabilitation System"
     page.window.width = 1100
-    page.window.height = 800
+    page.window.height = 900
     page.theme_mode = ft.ThemeMode.LIGHT
     page.bgcolor = "#F3F5F8"
     page.padding = 24

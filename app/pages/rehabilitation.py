@@ -8,6 +8,8 @@ import flet as ft
 import flet.canvas as cv
 from bleak import BleakClient, BleakScanner
 
+import config
+
 
 BT_DEVICE_NAME = "Exoskeleton_ESP32"
 SERVICE_UUID = "12345678-1234-1234-1234-1234567890AB"
@@ -17,9 +19,8 @@ FEEDBACK_UUID = "12345678-1234-1234-1234-1234567890AD"
 BT_SEND_INTERVAL = 0.02
 FEEDBACK_TIMEOUT = 0.5
 
-MIN_ANGLE = 0.0
+MIN_ANGLE = 10.0
 MAX_ANGLE = 140.0
-CYCLE_TIME = 15.0
 
 ARM_LENGTH = 125
 UI_FPS = 30
@@ -27,23 +28,23 @@ IMAGE_UPDATE_THRESHOLD = 0.1
 
 
 def reference_trajectory(t):
+    cycle_time = config.CYCLE_TIME
+
     midpoint = (MIN_ANGLE + MAX_ANGLE) / 2
     amplitude = (MAX_ANGLE - MIN_ANGLE) / 2
 
     theta_ref = midpoint - amplitude * math.cos(
-        2 * math.pi * t / CYCLE_TIME
+        2 * math.pi * t / cycle_time
     )
 
     omega_ref = (
         amplitude
-        * (2 * math.pi / CYCLE_TIME)
-        * math.sin(2 * math.pi * t / CYCLE_TIME)
+        * (2 * math.pi / cycle_time)
+        * math.sin(2 * math.pi * t / cycle_time)
     )
-
     return theta_ref, omega_ref
 
-
-def make_arm_shapes(angle_deg):
+def make_arm_shapes(angle_deg, reference=False):
     shapes = []
 
     ex, ey = 190, 155
@@ -62,35 +63,53 @@ def make_arm_shapes(angle_deg):
             ey + distance * dy + offset * py,
         )
 
-    outline = "#644132"
-    skin = "#F4B78F"
-    highlight = "#FFD7B8"
-    shading = "#CD8969"
+    if reference:
+        outline = "#777777"
+        skin = "#C5C5C5"
+        highlight = "#EEEEEE"
+        shading = "#888888"
+        outline_width = 62
+        upper_width = 50
+        forearm_outline_width = 48
+        forearm_width = 40
+        hand_outline_width = 32
+        hand_width = 23
+    else:
+        outline = "#644132"
+        skin = "#F4B78F"
+        highlight = "#FFD7B8"
+        shading = "#CD8969"
+        outline_width = 54
+        upper_width = 46
+        forearm_outline_width = 38
+        forearm_width = 30
+        hand_outline_width = 25
+        hand_width = 17
 
     outline_paint = ft.Paint(
         color=outline,
-        stroke_width=54,
+        stroke_width=outline_width,
         style=ft.PaintingStyle.STROKE,
         stroke_cap=ft.StrokeCap.ROUND,
     )
 
     upper_arm_paint = ft.Paint(
         color=skin,
-        stroke_width=46,
+        stroke_width=upper_width,
         style=ft.PaintingStyle.STROKE,
         stroke_cap=ft.StrokeCap.ROUND,
     )
 
     forearm_outline_paint = ft.Paint(
         color=outline,
-        stroke_width=38,
+        stroke_width=forearm_outline_width,
         style=ft.PaintingStyle.STROKE,
         stroke_cap=ft.StrokeCap.ROUND,
     )
 
     forearm_paint = ft.Paint(
         color=skin,
-        stroke_width=30,
+        stroke_width=forearm_width,
         style=ft.PaintingStyle.STROKE,
         stroke_cap=ft.StrokeCap.ROUND,
     )
@@ -104,126 +123,145 @@ def make_arm_shapes(angle_deg):
 
     shoulder = (ex, ey - 130)
 
-    shapes.append(
-        cv.Line(
-            shoulder[0], shoulder[1],
-            ex, ey,
-            paint=outline_paint,
-        )
-    )
+    shapes.append(cv.Line(
+        shoulder[0], shoulder[1], ex, ey, paint=outline_paint
+    ))
+    shapes.append(cv.Line(
+        shoulder[0], shoulder[1], ex, ey, paint=upper_arm_paint
+    ))
+    shapes.append(cv.Circle(
+        shoulder[0], shoulder[1], 27, paint=ft.Paint(color=outline)
+    ))
+    shapes.append(cv.Circle(
+        shoulder[0], shoulder[1], 23, paint=ft.Paint(color=skin)
+    ))
 
-    shapes.append(
-        cv.Line(
-            shoulder[0], shoulder[1],
-            ex, ey,
-            paint=upper_arm_paint,
-        )
-    )
-
-    shapes.append(
-        cv.Circle(
-            shoulder[0], shoulder[1], 27,
-            paint=ft.Paint(color=outline),
-        )
-    )
-
-    shapes.append(
-        cv.Circle(
-            shoulder[0], shoulder[1], 23,
-            paint=ft.Paint(color=skin),
-        )
-    )
-
-    shapes.append(
-        cv.Line(
-            *point(0),
-            *point(ARM_LENGTH),
-            paint=forearm_outline_paint,
-        )
-    )
-
-    shapes.append(
-        cv.Line(
-            *point(0),
-            *point(ARM_LENGTH),
-            paint=forearm_paint,
-        )
-    )
-
-    shapes.append(
-        cv.Line(
-            *point(25, 3),
-            *point(ARM_LENGTH * 0.78, 3),
-            paint=highlight_paint,
-        )
-    )
+    shapes.append(cv.Line(
+        *point(0), *point(ARM_LENGTH), paint=forearm_outline_paint
+    ))
+    shapes.append(cv.Line(
+        *point(0), *point(ARM_LENGTH), paint=forearm_paint
+    ))
+    shapes.append(cv.Line(
+        *point(25, 3), *point(ARM_LENGTH * 0.78, 3),
+        paint=highlight_paint
+    ))
 
     hand_outline_paint = ft.Paint(
         color=outline,
-        stroke_width=25,
+        stroke_width=hand_outline_width,
         style=ft.PaintingStyle.STROKE,
         stroke_cap=ft.StrokeCap.ROUND,
     )
-
     hand_paint = ft.Paint(
         color=skin,
-        stroke_width=17,
+        stroke_width=hand_width,
         style=ft.PaintingStyle.STROKE,
         stroke_cap=ft.StrokeCap.ROUND,
     )
 
-    shapes.append(
-        cv.Line(
-            *point(ARM_LENGTH - 2),
-            *point(ARM_LENGTH + 35),
-            paint=hand_outline_paint,
-        )
+    # Palm: a slightly tapered shape that continues naturally from the wrist.
+    shapes.append(cv.Line(
+        *point(ARM_LENGTH - 3), *point(ARM_LENGTH + 27),
+        paint=hand_outline_paint,
+    ))
+    shapes.append(cv.Line(
+        *point(ARM_LENGTH - 3), *point(ARM_LENGTH + 27),
+        paint=hand_paint,
+    ))
+
+    # Four separated fingers, with subtly different lengths.
+    finger_specs = [
+        (-11, 27, 53),
+        (-4, 29, 59),
+        (3, 29, 57),
+        (10, 26, 51),
+    ]
+
+    finger_outline = ft.Paint(
+        color=outline,
+        stroke_width=9 if not reference else 11,
+        style=ft.PaintingStyle.STROKE,
+        stroke_cap=ft.StrokeCap.ROUND,
+    )
+    finger_fill = ft.Paint(
+        color=skin,
+        stroke_width=6 if not reference else 8,
+        style=ft.PaintingStyle.STROKE,
+        stroke_cap=ft.StrokeCap.ROUND,
     )
 
-    shapes.append(
-        cv.Line(
-            *point(ARM_LENGTH - 2),
-            *point(ARM_LENGTH + 35),
-            paint=hand_paint,
-        )
+    for offset, start, end in finger_specs:
+        shapes.append(cv.Line(
+            *point(ARM_LENGTH + start, offset),
+            *point(ARM_LENGTH + end, offset * 1.05),
+            paint=finger_outline,
+        ))
+        shapes.append(cv.Line(
+            *point(ARM_LENGTH + start, offset),
+            *point(ARM_LENGTH + end, offset * 1.05),
+            paint=finger_fill,
+        ))
+
+    # Thumb angles away from the palm instead of appearing as another straight finger.
+    thumb_outline = ft.Paint(
+        color=outline,
+        stroke_width=12 if not reference else 14,
+        style=ft.PaintingStyle.STROKE,
+        stroke_cap=ft.StrokeCap.ROUND,
+    )
+    thumb_fill = ft.Paint(
+        color=skin,
+        stroke_width=8 if not reference else 10,
+        style=ft.PaintingStyle.STROKE,
+        stroke_cap=ft.StrokeCap.ROUND,
     )
 
-    finger_paint = ft.Paint(
+    thumb_start = point(ARM_LENGTH + 12, 11)
+    thumb_mid = point(ARM_LENGTH + 24, 23)
+    thumb_end = point(ARM_LENGTH + 39, 25)
+
+    shapes.append(cv.Line(
+        *thumb_start, *thumb_mid, paint=thumb_outline
+    ))
+    shapes.append(cv.Line(
+        *thumb_start, *thumb_mid, paint=thumb_fill
+    ))
+    shapes.append(cv.Line(
+        *thumb_mid, *thumb_end, paint=thumb_outline
+    ))
+    shapes.append(cv.Line(
+        *thumb_mid, *thumb_end, paint=thumb_fill
+    ))
+
+    # Subtle palm and finger creases.
+    crease_paint = ft.Paint(
         color=shading,
-        stroke_width=2,
+        stroke_width=1.5 if not reference else 2,
         style=ft.PaintingStyle.STROKE,
         stroke_cap=ft.StrokeCap.ROUND,
     )
+    shapes.append(cv.Line(
+        *point(ARM_LENGTH + 21, -7),
+        *point(ARM_LENGTH + 26, 7),
+        paint=crease_paint,
+    ))
+    for offset, start in [(-7, 37), (0, 40), (7, 38)]:
+        shapes.append(cv.Line(
+            *point(ARM_LENGTH + start, offset),
+            *point(ARM_LENGTH + start + 5, offset),
+            paint=crease_paint,
+        ))
 
-    for offset in [-5, 1, 7]:
-        shapes.append(
-            cv.Line(
-                *point(ARM_LENGTH + 20, offset),
-                *point(ARM_LENGTH + 27, offset),
-                paint=finger_paint,
-            )
-        )
-
-    shapes.append(
-        cv.Circle(
-            ex, ey, 23,
-            paint=ft.Paint(color=outline),
-        )
-    )
-
-    shapes.append(
-        cv.Circle(
-            ex, ey, 19,
-            paint=ft.Paint(color=skin),
-        )
-    )
-
-    shapes.append(
-        cv.Circle(
-            ex - 5, ey - 7, 4,
-            paint=ft.Paint(color=highlight),
-        )
-    )
+    shapes.append(cv.Circle(
+        ex, ey, 23, paint=ft.Paint(color=outline)
+    ))
+    shapes.append(cv.Circle(
+        ex, ey, 19, paint=ft.Paint(color=skin)
+    ))
+    shapes.append(cv.Circle(
+        ex - 5, ey - 7, 4, paint=ft.Paint(color=highlight)
+    ))
 
     return shapes
 
@@ -246,8 +284,8 @@ class RehabilitationPage:
         self.theta_ref = MIN_ANGLE
         self.latest_error = None
 
-        self.last_reference_drawn = 0.0
-        self.last_patient_drawn = 0.0
+        self.last_reference_drawn = 10.0
+        self.last_patient_drawn = 10.0
 
         self.countdown_active = False
         self.countdown_end = None
@@ -307,16 +345,13 @@ class RehabilitationPage:
             weight=ft.FontWeight.BOLD,
         )
 
-        self.reference_canvas = cv.Canvas(
+        self.overlay_canvas = cv.Canvas(
             width=380,
-            height=300,
-            shapes=make_arm_shapes(0),
-        )
-
-        self.patient_canvas = cv.Canvas(
-            width=380,
-            height=300,
-            shapes=make_arm_shapes(0),
+            height=400,
+            shapes=(
+                make_arm_shapes(MIN_ANGLE, reference=True)
+                + make_arm_shapes(MIN_ANGLE)
+            ),
         )
 
         self.run_status = ft.Text(
@@ -344,6 +379,34 @@ class RehabilitationPage:
             border_radius=75,
             alignment=ft.Alignment(0, 0),
             bgcolor="white",
+        )
+
+        self.countdown_instruction = ft.Container(
+            content=ft.Text(
+                "Flex and extend your arm to follow the grey reference trajectory",
+                size=18,
+                weight=ft.FontWeight.BOLD,
+                color="white",
+                text_align=ft.TextAlign.CENTER,
+            ),
+            width=340,
+            padding=16,
+            bgcolor="#1E5AA8",
+            border_radius=12,
+        )
+
+        self.countdown_overlay = ft.Container(
+            content=ft.Column(
+                [
+                    self.countdown_circle,
+                    self.countdown_instruction,
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=16,
+            ),
+            alignment=ft.Alignment(0, 0),
+            expand=True,
             visible=False,
         )
 
@@ -357,50 +420,68 @@ class RehabilitationPage:
 
     def build(self):
 
-        reference_card = ft.Container(
+        comparison_card = ft.Container(
             content=ft.Column(
                 [
                     ft.Text(
-                        "REFERENCE ARM",
-                        color="#1E5AA8",
+                        "Move your arm to follow the grey trajectory as closely as possible",
+                        color="#243447",
                         weight=ft.FontWeight.BOLD,
+                        size=20,
                     ),
-
-                    self.reference_canvas,
-
-                    ft.Text(
-                        "Target elbow angle",
-                        color="#667788",
+                    ft.Row(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Container(
+                                        width=14,
+                                        height=14,
+                                        bgcolor="#C5C5C5",
+                                        border_radius=7,
+                                    ),
+                                    ft.Text("Reference", color="#667788"),
+                                ],
+                                spacing=6,
+                            ),
+                            ft.Row(
+                                [
+                                    ft.Container(
+                                        width=14,
+                                        height=14,
+                                        bgcolor="#F4B78F",
+                                        border=ft.Border.all(1, "#644132"),
+                                        border_radius=7,
+                                    ),
+                                    ft.Text("Patient", color="#667788"),
+                                ],
+                                spacing=6,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=24,
                     ),
-
-                    self.reference_value,
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=8,
-            ),
-            bgcolor="white",
-            border_radius=14,
-            padding=16,
-            expand=True,
-        )
-
-        patient_card = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text(
-                        "PATIENT ARM",
-                        color="#B83232",
-                        weight=ft.FontWeight.BOLD,
+                    self.overlay_canvas,
+                    ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.Text("TARGET ANGLE", color="#667788"),
+                                    self.reference_value,
+                                ],
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                spacing=4,
+                            ),
+                            ft.Column(
+                                [
+                                    ft.Text("MEASURED ANGLE", color="#667788"),
+                                    self.actual_value,
+                                ],
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                spacing=4,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_EVENLY,
                     ),
-
-                    self.patient_canvas,
-
-                    ft.Text(
-                        "Measured elbow angle",
-                        color="#667788",
-                    ),
-
-                    self.actual_value,
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=8,
@@ -426,20 +507,8 @@ class RehabilitationPage:
 
                 ft.Stack(
                     [
-                        ft.Row(
-                            [
-                                reference_card,
-                                patient_card,
-                            ],
-                            spacing=16,
-                            expand=True,
-                        ),
-
-                        ft.Container(
-                            content=self.countdown_circle,
-                            alignment=ft.Alignment(0, 0),
-                            expand=True,
-                        ),
+                        comparison_card,
+                        self.countdown_overlay,
                     ],
                     expand=True,
                 ),
@@ -611,7 +680,7 @@ class RehabilitationPage:
             self.start_pause_label.value = "START"
             self.start_pause_button.icon = ft.Icons.PLAY_ARROW
 
-            self.countdown_circle.visible = False
+            self.countdown_overlay.visible = False
 
             self.run_status.value = "Rehabilitation paused"
             self.run_status.color = "#667788"
@@ -624,7 +693,7 @@ class RehabilitationPage:
             self.countdown_end = time.monotonic() + 5
 
             self.countdown_number.value = "5"
-            self.countdown_circle.visible = True
+            self.countdown_overlay.visible = True
 
             self.start_pause_button.disabled = True
             self.start_pause_label.value = "GET READY..."
@@ -691,7 +760,7 @@ class RehabilitationPage:
 
                     self.start_time = now
 
-                    self.countdown_circle.visible = False
+                    self.countdown_overlay.visible = False
 
                     self.start_pause_button.disabled = False
                     self.start_pause_label.value = "PAUSE"
@@ -703,13 +772,29 @@ class RehabilitationPage:
                     self.run_status.color = "#218C55"
 
             if self.running and self.start_time is not None:
-
                 elapsed = (
                     self.elapsed_before_pause
                     + (now - self.start_time)
                 )
 
-                self.theta_ref, _ = reference_trajectory(elapsed)
+                if elapsed >= config.SESSION_DURATION:
+                    self.running = False
+                    self.start_time = None
+
+                    self.elapsed_before_pause = 0.0
+                    self.has_started = False
+
+                    self.start_pause_label.value = "START"
+                    self.start_pause_button.icon = ft.Icons.PLAY_ARROW
+                    self.start_pause_button.disabled = False
+
+                    self.countdown_overlay.visible = False
+
+                    self.run_status.value = "Session completed!"
+                    self.run_status.color = "#218C55"
+
+                else:
+                    self.theta_ref, _ = reference_trajectory(elapsed)
 
             if (
                 self.client is not None
@@ -744,32 +829,30 @@ class RehabilitationPage:
                 f"{self.theta_ref:.1f}°"
             )
 
-            if (
-                abs(
-                    self.theta_ref - self.last_reference_drawn
-                ) >= IMAGE_UPDATE_THRESHOLD
-            ):
+            reference_changed = (
+                abs(self.theta_ref - self.last_reference_drawn)
+                >= IMAGE_UPDATE_THRESHOLD
+            )
 
-                self.reference_canvas.shapes = make_arm_shapes(
-                    self.theta_ref
+            patient_changed = (
+                feedback_valid
+                and abs(actual - self.last_patient_drawn)
+                >= IMAGE_UPDATE_THRESHOLD
+            )
+
+            if reference_changed or patient_changed:
+                patient_angle = actual if feedback_valid else self.last_patient_drawn
+                self.overlay_canvas.shapes = (
+                    make_arm_shapes(self.theta_ref, reference=True)
+                    + make_arm_shapes(patient_angle)
                 )
-
                 self.last_reference_drawn = self.theta_ref
+                if feedback_valid:
+                    self.last_patient_drawn = actual
 
             if feedback_valid:
 
                 self.actual_value.value = f"{actual:.1f}°"
-
-                if (
-                    abs(actual - self.last_patient_drawn)
-                    >= IMAGE_UPDATE_THRESHOLD
-                ):
-
-                    self.patient_canvas.shapes = make_arm_shapes(
-                        actual
-                    )
-
-                    self.last_patient_drawn = actual
 
                 self.error_value.value = (
                     f"{self.latest_error:+.1f}°"
